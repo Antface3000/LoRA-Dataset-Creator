@@ -1,130 +1,117 @@
-# LoRA Dataset Manager
+# LoRA Dataset Creator
 
-A modular, VRAM-aware desktop application for end-to-end preparation of AI image training datasets (specifically for Flux/SDXL LoRAs).
+A desktop application for end-to-end preparation of AI image training datasets for Flux/SDXL LoRAs.
+Handles the full pipeline: crop, tag, caption, and finalize — all in one place.
 
 ## Features
 
-### Stage 1: Quality Gate (The "Critic")
-- **Blur Detection**: Laplacian variance calculation
-- **Aesthetic Scoring**: CLIP-based scoring (1-10 scale)
-- **Score-Based Renaming**: Files renamed with `[Score]_Filename.ext` format
-- **Interactive Thresholds**: Adjustable blur and aesthetic thresholds
-- **Dry Run Mode**: Preview scores without moving files
+- **Crop & Sort** — Manual or YOLO-automated cropping into portrait / square / landscape buckets
+- **Quality Filter** — Blur detection and aesthetic scoring to remove low-quality images
+- **WD14 Tagging** — Automatic tag generation with adjustable confidence threshold
+- **VLM Captioning** — Natural language captions via JoyCaption, Florence2, or Gemma3
+- **Caption Finalization** — Optional GGUF LLM pass to polish raw captions into coherent prose
+- **Batch Rename** — Rename images using WD14 tags as filename prefixes
+- **Profile System** — Save folder paths, trigger words, and caption settings per project
+- **Built-in Tutorial** — Click the **?** button in the app for a full getting-started guide
 
-### Stage 2: Aspect Ratio Bucketing & Smart Cropping
-- **YOLOv8 Person Detection**: Automatically detects and centers on people
-- **Smart Bucket Selection**: Auto-selects portrait/square/landscape based on person aspect ratio
-- **Manual Override**: Drag to adjust crop position
-- **Flux-Optimized Resolutions**: 
-  - Portrait: 832x1216
-  - Square: 1024x1024
-  - Landscape: 1216x832
+---
 
-### Stage 3: The "Gold Standard" Captioning
-- **WD14 Tagging**: Generates raw tags (e.g., '1girl', 'solo', 'denim_jacket')
-- **JoyCaption VLM**: Generates natural language captions guided by tags
-- **Glass Box Editor**: Dual-pane interface showing tags and captions side-by-side
-- **Tag Management**: Add/remove tags with automatic re-generation
-- **Dirty Flag**: Prevents auto-overwrite of manually edited captions
+## Prerequisites
 
-## Architecture
+Before installing, make sure you have:
 
-### Modular Design
-- **`/core`**: Business logic only (NO UI code)
-  - `/ai`: AI inference modules (aesthetic, cropper, tagger, captioner, vram)
-  - `/data`: File handling and profiles
-- **`/ui`**: View components only (delegates to core)
-  - `/components`: Reusable widgets (ImageCard, TagChip)
-  - `/tabs`: Tab interfaces (SortTab, EditorTab)
+1. **Python 3.10 or newer** — [python.org/downloads](https://www.python.org/downloads/)
+   - During install, tick **"Add Python to PATH"**
+2. **Git** — [git-scm.com/download/win](https://git-scm.com/download/win)
+3. **NVIDIA GPU with CUDA** recommended (8 GB+ VRAM for captioning). CPU-only works for tagging.
 
-### VRAM Management
-- **State Machine**: IDLE → CROPPING → CAPTIONING
-- **Automatic Model Loading/Unloading**: Models unload when switching tabs
-- **12GB VRAM Target**: Optimized for RTX 4070
+---
 
 ## Installation
 
-1. Install Python 3.10+
-2. Install dependencies:
-```bash
+Open **PowerShell** or **Command Prompt** and run:
+
+```powershell
+git clone https://github.com/Antface3000/LoRA-Dataset-Creator.git
+cd LoRA-Dataset-Creator
 pip install -r requirements.txt
-```
-
-## Usage
-
-Run the application:
-```bash
 python main.py
 ```
 
-### Workflow
+That's it — the app will launch. No models are required to start; download only what you need.
 
-1. **Select Folders**: Choose source and output folders
-2. **Quality Filter** (Optional): Run quality gate to filter/reject low-quality images
-3. **Sort & Crop**: 
-   - Images are automatically processed with person detection
-   - Adjust crop manually if needed
-   - Save to appropriate bucket folder
-4. **Caption Editor**:
-   - Load image
-   - Generate tags (WD14)
-   - Generate caption (JoyCaption)
-   - Edit tags/caption as needed
+---
 
-## Profiles
+## AI Models
 
-Save different settings as profiles:
-- **Flux Realistic**: Default profile for realistic images
-- **SDXL Anime**: Profile optimized for anime-style images
+All models go in the `models/` folder. The app works without them for basic file management;
+models are only needed for tagging, captioning, and auto-cropping.
 
-Create custom profiles via the profile selector in the menu bar.
+| Model | Required for | Path | Download |
+|---|---|---|---|
+| YOLOv8n | Auto crop | `models/yolov8n.pt` | [Ultralytics releases](https://github.com/ultralytics/assets/releases) |
+| WD14 Tagger | Generate tags | *(auto-downloaded on first use)* | Automatic |
+| JoyCaption | Generate captions | `models/joycaption/` | HuggingFace `fancyfeast/llama-joycaption-alpha-two-hf-llava` |
+| Florence2 | Generate captions | `models/florence2/` | HuggingFace `microsoft/Florence-2-large` |
+| Gemma3 | Generate captions | `models/gemma3/` | HuggingFace `google/gemma-3-4b-it` *(requires HF login)* |
+| Wizard-Vicuna GGUF | Caption finalization | `models/Wizard_Vicuna/Wizard-Vicuna-7B-Uncensored.Q4_K_M.gguf` | HuggingFace `TheBloke/Wizard-Vicuna-7B-Uncensored-GGUF` |
 
-## Model Integration
+**Download HuggingFace models with:**
+```powershell
+pip install huggingface_hub
+huggingface-cli download fancyfeast/llama-joycaption-alpha-two-hf-llava --local-dir models/joycaption
+```
 
-### WD14 Tagger
-To integrate WD14:
-1. Place model files in appropriate location
-2. Update `core/ai/tagger.py` `load_model()` method with actual model loading code
+See `models/README.md` or open the in-app tutorial (**?** button) for full instructions.
 
-### JoyCaption VLM
-To integrate JoyCaption:
-1. Place model files in appropriate location (user will move model files)
-2. Update `core/ai/captioner.py` `load_model()` method with actual model loading code
+---
 
-## Development Rules
+## Usage
 
-- **File Size**: All files must be ≤250 lines
-- **Path Handling**: Use `pathlib.Path` exclusively (NO `os.path`)
-- **GUI Framework**: CustomTkinter only (NO tkinter in new code)
-- **Separation**: NO UI code in `/core`, NO business logic in `/ui`
-- **VRAM Safety**: Models must unload before state transitions
+```powershell
+python main.py
+```
+
+### Typical workflow
+
+1. **Wizard › Step 1** — Set your source and output folders
+2. **Wizard › Step 2** — Add images to the session
+3. **Crop & Sort tab** — Review and crop images (manual or auto with YOLO)
+4. **Wizard › Step 3** — Generate tags and captions, edit as needed
+5. **Wizard › Step 4** — Finalize: writes images + `.txt` sidecars to the output folder
+
+The **Batch Rename** tab (optional) lets you rename raw images using WD14 tags before processing.
+
+---
 
 ## Project Structure
 
 ```
-/LoraDatasetManager
-├── /core                   # NO UI CODE
-│   ├── /ai                 # AI Logic
-│   │   ├── aesthetic.py
-│   │   ├── cropper.py
-│   │   ├── tagger.py
-│   │   ├── captioner.py
-│   │   └── vram.py
-│   ├── /data
-│   │   ├── file_handler.py
-│   │   └── profiles.py
-│   ├── config.py
-│   └── pipeline_manager.py
-├── /ui                     # VIEW COMPONENTS ONLY
-│   ├── /components
-│   ├── /tabs
-│   └── app_main.py
+LoRA-Dataset-Creator/
+├── core/               # Business logic (no UI code)
+│   ├── ai/             # AI modules: cropper, tagger, captioner, vram
+│   ├── data/           # File handling and profile management
+│   ├── config.py       # Model paths and constants
+│   └── session.py      # In-memory session state
+├── ui/                 # UI only (no business logic)
+│   ├── wizard/         # Wizard steps
+│   ├── tabs/           # Crop & Sort, Batch Rename, Caption Editor tabs
+│   ├── app_main.py     # Main window
+│   └── tutorial_dialog.py
+├── models/             # AI model weights (not included — see above)
+├── docs/               # Developer documentation
 ├── main.py
 └── requirements.txt
 ```
 
-## Philosophy: "The Glass Box"
+---
 
-- **Transparency**: See exactly why AI made decisions
-- **Non-Destructive**: Original images never overwritten
-- **VRAM Awareness**: Aggressive resource management for 12GB limit
+## System Requirements
+
+| Component | Minimum | Recommended |
+|---|---|---|
+| Python | 3.10 | 3.11+ |
+| RAM | 8 GB | 16 GB |
+| VRAM | 0 GB (CPU) | 8–12 GB (NVIDIA) |
+| Storage | 2 GB | 20 GB (with all models) |
+| OS | Windows 10 | Windows 11 |
