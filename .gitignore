@@ -1,0 +1,32 @@
+# Model weights — too large for git
+models/florence2/
+models/gemma3/
+models/joycaption/
+models/Llama/
+models/Wizard_Vicuna/
+models/yolov8n.pt
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.onnx
+
+# Runtime / personal config
+flux_prep_config.json
+benchmark_output/
+
+# Cursor / IDE
+.cursor/
+*.cursor-tutor
+
+# Windows
+Thumbs.db
+desktop.ini
