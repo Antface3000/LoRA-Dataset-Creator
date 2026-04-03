@@ -16,6 +16,9 @@ _SECTIONS = [
             "  1. Set Folders  →  2. Add Images  →  3. Crop & Sort  →  "
             "4. Tag & Caption  →  5. Finalize\n"
             "The Batch Rename tab is an optional pre-processing step.",
+            "Terminal / command-line instructions in this guide must be run in PowerShell.\n"
+            "To open PowerShell:  press Win + R, type  powershell  and press Enter.\n"
+            "All commands should be run from inside the LoRA-Dataset-Creator folder.",
         ],
     ),
     (
@@ -190,12 +193,92 @@ _SECTIONS = [
             "  Requires:  pip install llama-cpp-python  (with CUDA support for GPU offload)",
             "── Installing the huggingface-cli ──\n"
             "\n"
+            "Open PowerShell (Win + R → powershell → Enter), navigate to the project\n"
+            "folder, then run:\n"
+            "\n"
             "  pip install huggingface_hub\n"
+            "\n"
+            "All download commands (huggingface-cli download …) must also be run from\n"
+            "PowerShell inside the LoRA-Dataset-Creator folder.\n"
             "\n"
             "For large models (JoyCaption, Gemma3) a GPU with at least 8 GB VRAM is\n"
             "recommended. Florence2 and Wizard-Vicuna can run on 4–6 GB VRAM.\n"
             "The app manages loading and unloading models automatically to fit within\n"
             "available VRAM as you move between wizard steps.",
+        ],
+    ),
+    (
+        "Caption API Backends",
+        [
+            "The app can generate captions using five different backends. Choose one in\n"
+            "Settings → Caption Model / Backend → Caption source.\n"
+            "All commands below must be run in PowerShell from the LoRA-Dataset-Creator folder.\n"
+            "(Win + R → powershell → Enter)",
+            "── local (default — no internet required) ──\n"
+            "\n"
+            "Uses a locally installed HuggingFace transformers model.\n"
+            "Choose between joycaption, florence2, or gemma3 in the 'Local model' dropdown.\n"
+            "See the 'Model Setup' section for download instructions.\n"
+            "\n"
+            "Required dependencies (already included in requirements.txt):\n"
+            "  pip install transformers accelerate",
+            "── ollama (local server — privacy-friendly) ──\n"
+            "\n"
+            "Requires a running Ollama server with a vision-capable model installed.\n"
+            "\n"
+            "1. Install Ollama: https://ollama.com/download\n"
+            "2. Pull a vision model:\n"
+            "     ollama pull llava\n"
+            "   Other options: bakllava, moondream, llava-llama3\n"
+            "3. Start the server (runs automatically after install, or):\n"
+            "     ollama serve\n"
+            "4. In Settings set:\n"
+            "     Caption source  = ollama\n"
+            "     Ollama URL      = http://localhost:11434   (default)\n"
+            "     Ollama model    = llava   (or click 'Fetch models')\n"
+            "\n"
+            "Install dependency:\n"
+            "  pip install requests",
+            "── openai (GPT-4o / GPT-4 Vision) ──\n"
+            "\n"
+            "Uses the OpenAI API — requires an account and API credits.\n"
+            "\n"
+            "1. Create an API key at: https://platform.openai.com/api-keys\n"
+            "2. In Settings set:\n"
+            "     Caption source = openai\n"
+            "     OpenAI API key = sk-…\n"
+            "     OpenAI model   = gpt-4o   (recommended)\n"
+            "\n"
+            "Install dependency:\n"
+            "  pip install openai\n"
+            "\n"
+            "Cost: ~$0.002–0.005 per image with gpt-4o at default settings.",
+            "── anthropic (Claude) ──\n"
+            "\n"
+            "Uses the Anthropic Messages API — requires an Anthropic account.\n"
+            "\n"
+            "1. Create an API key at: https://console.anthropic.com\n"
+            "2. In Settings set:\n"
+            "     Caption source   = anthropic\n"
+            "     Anthropic API key = sk-ant-…\n"
+            "     Anthropic model   = claude-3-5-haiku-20241022   (cheapest)\n"
+            "\n"
+            "Install dependency:\n"
+            "  pip install anthropic",
+            "── gemini (Google Gemini) ──\n"
+            "\n"
+            "Uses the Google Gemini API — free tier available.\n"
+            "\n"
+            "1. Create an API key at: https://aistudio.google.com/app/apikey\n"
+            "2. In Settings set:\n"
+            "     Caption source  = gemini\n"
+            "     Gemini API key  = AIza…\n"
+            "     Gemini model    = gemini-2.0-flash   (recommended)\n"
+            "\n"
+            "Install dependency:\n"
+            "  pip install google-generativeai\n"
+            "\n"
+            "Free tier: 15 requests/min, 1 500 requests/day (as of 2026).",
         ],
     ),
     (

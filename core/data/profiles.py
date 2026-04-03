@@ -60,6 +60,16 @@ class ProfilesManager:
                     },
                     "vlm_prompt": "Describe this image in detail, focusing on the subject and composition.",
                     "caption_system_prompt": "",
+                    "caption_source": "local",
+                    "caption_local_model": "joycaption",
+                    "ollama_url": "http://localhost:11434",
+                    "ollama_model": "llava",
+                    "openai_api_key": "",
+                    "openai_model": "gpt-4o",
+                    "anthropic_api_key": "",
+                    "anthropic_model": "claude-3-5-haiku-20241022",
+                    "gemini_api_key": "",
+                    "gemini_model": "gemini-2.0-flash",
                     "padding_margin": DEFAULT_PADDING_MARGIN,
                     "person_confidence": DEFAULT_PERSON_CONFIDENCE,
                     "ui_scaling": 1.0,
@@ -187,6 +197,31 @@ class ProfilesManager:
         name = self.config.get("current_profile", "User settings")
         profile = self.load_profile(name) or self._default_config()["profiles"]["User settings"]
         profile["caption_system_prompt"] = prompt or ""
+        self.save_profile(name, profile)
+
+    # Caption backend helpers
+
+    _CAPTION_BACKEND_KEYS = [
+        "caption_source", "caption_local_model",
+        "ollama_url", "ollama_model",
+        "openai_api_key", "openai_model",
+        "anthropic_api_key", "anthropic_model",
+        "gemini_api_key", "gemini_model",
+    ]
+
+    def get_caption_backend_settings(self) -> Dict:
+        """Return caption backend fields from the current profile."""
+        profile = self.get_current_profile()
+        defaults = self._default_config()["profiles"]["User settings"]
+        return {k: profile.get(k, defaults.get(k, "")) for k in self._CAPTION_BACKEND_KEYS}
+
+    def set_caption_backend_settings(self, settings: Dict) -> None:
+        """Persist caption backend fields to the current profile."""
+        name = self.config.get("current_profile", "User settings")
+        profile = self.load_profile(name) or self._default_config()["profiles"]["User settings"]
+        for k in self._CAPTION_BACKEND_KEYS:
+            if k in settings:
+                profile[k] = settings[k]
         self.save_profile(name, profile)
 
     def get_processed_folder(self) -> Optional[str]:

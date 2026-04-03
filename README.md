@@ -106,6 +106,73 @@ LoRA-Dataset-Creator/
 
 ---
 
+## Caption API Backends
+
+The app supports five captioning backends, selectable per-profile in **Settings → Caption Model / Backend**.
+
+> **All `pip install` commands below must be run in PowerShell from inside the project folder.**
+> Open PowerShell: press **Win + R**, type `powershell` and press **Enter**.
+
+### `local` (default — no internet required)
+
+Uses a locally installed HuggingFace transformers model on your GPU.  
+Choose between **joycaption**, **florence2**, or **gemma3** in the *Local model* dropdown.  
+See the [AI Models](#ai-models) section for download instructions.
+
+```
+pip install transformers accelerate
+```
+
+### `ollama` — local Ollama server
+
+Runs vision-capable open-source models entirely on your machine.
+
+1. Install Ollama: <https://ollama.com/download>
+2. Pull a vision model:
+   ```
+   ollama pull llava
+   ```
+   Other options: `bakllava`, `moondream`, `llava-llama3`
+3. Start the server (runs automatically after install, or run `ollama serve`)
+4. In Settings set **Caption source** = `ollama`, enter the URL (`http://localhost:11434`), and pick a model (or click **Fetch models**).
+
+```
+pip install requests
+```
+
+### `openai` — OpenAI GPT-4o
+
+1. Get an API key at <https://platform.openai.com/api-keys>
+2. In Settings set **Caption source** = `openai`, paste your key, choose a model (default: `gpt-4o`).
+
+```
+pip install openai
+```
+
+Cost: ~$0.002–0.005 per image with `gpt-4o` at default resolution.
+
+### `anthropic` — Anthropic Claude
+
+1. Get an API key at <https://console.anthropic.com>
+2. In Settings set **Caption source** = `anthropic`, paste your key, choose a model (default: `claude-3-5-haiku-20241022`).
+
+```
+pip install anthropic
+```
+
+### `gemini` — Google Gemini
+
+Free tier available (15 req/min, 1 500 req/day as of 2026).
+
+1. Get an API key at <https://aistudio.google.com/app/apikey>
+2. In Settings set **Caption source** = `gemini`, paste your key, choose a model (default: `gemini-2.0-flash`).
+
+```
+pip install google-generativeai
+```
+
+---
+
 ## System Requirements
 
 | Component | Minimum | Recommended |

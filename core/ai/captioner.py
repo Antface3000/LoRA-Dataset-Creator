@@ -716,20 +716,56 @@ def get_captioner() -> JoyCaption:
 def generate_caption(
     image_path: Path,
     tags: list[str],
-    user_prompt: str = ""
+    user_prompt: str = "",
+    *,
+    model_override: Optional[str] = None,
+    prompt_override: Optional[str] = None,
+    system_prompt_override: Optional[str] = None,
 ) -> str:
-    """Convenience function to generate a caption.
-    
-    Args:
-        image_path: Path to image file
-        tags: List of WD14 tags
-        user_prompt: Optional user prompt
-    
-    Returns:
-        Caption string
+    """Generate a caption, routing through the active profile's caption backend.
+
+    When the active profile specifies a non-local source (ollama, openai,
+    anthropic, gemini) the call is dispatched via :func:`get_caption_backend`
+    and the local Captioner class is bypassed entirely.
+
+    Parameters
+    ----------
+    image_path:
+        Path to the image file.
+    tags:
+        WD14 tags already generated for this image.
+    user_prompt:
+        Optional instruction prompt.
+    model_override:
+        Force a specific local model (``"joycaption"``, ``"florence2"``,
+        ``"gemma3"``).  Ignored when a remote backend is active.
+    prompt_override:
+        Override the user instruction text.
+    system_prompt_override:
+        Override the system prompt.
     """
+    profile = get_profiles_manager().get_current_profile()
+    source = (profile.get("caption_source") or "local").lower()
+
+    if source != "local":
+        from core.ai.caption_backends import get_caption_backend
+        backend = get_caption_backend(profile)
+        return backend.generate(
+            image_path,
+            tags=tags,
+            prompt=prompt_override or user_prompt or None,
+            system_prompt=system_prompt_override,
+        )
+
+    # Local path — delegate to Captioner class
     captioner = get_captioner()
-    return captioner.generate_caption(image_path, tags, user_prompt)
+    if model_override:
+        captioner._active_model = model_override
+    return captioner.generate_caption(
+        image_path,
+        tags,
+        prompt_override or user_prompt,
+    )
 
 
 def run_caption_batch_two_phase(

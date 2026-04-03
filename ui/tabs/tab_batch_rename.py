@@ -114,14 +114,42 @@ class TabBatchRename(ctk.CTkFrame):
         )
         self._prepend_entry.grid(row=3, column=1, columnspan=2, sticky="ew", padx=4, pady=(8, 0))
         add_tooltip(self._prepend_entry, "Text always added at the start of every renamed filename, before AI tags")
+
+        # Simple rename row
+        ctk.CTkLabel(row1, text="Simple base name:").grid(row=4, column=0, sticky="w", padx=(0, 8), pady=(8, 0))
+        self._base_name_entry = ctk.CTkEntry(
+            row1, width=160, placeholder_text="e.g. character_name"
+        )
+        self._base_name_entry.grid(row=4, column=1, sticky="w", padx=4, pady=(8, 0))
+        add_tooltip(self._base_name_entry, "Fixed base name for all files (used with Preview simple rename)")
+        simple_opts = ctk.CTkFrame(row1, fg_color="transparent")
+        simple_opts.grid(row=4, column=2, sticky="w", padx=4, pady=(8, 0))
+        self._seq_suffix_var = ctk.BooleanVar(value=True)
+        _seq_check = ctk.CTkCheckBox(simple_opts, text="Sequential suffix", variable=self._seq_suffix_var, width=140)
+        _seq_check.pack(side="left", padx=(0, 8))
+        add_tooltip(_seq_check, "Append a sequential number (_001, _002, …) to each renamed file")
+        ctk.CTkLabel(simple_opts, text="Start:").pack(side="left")
+        self._seq_start_entry = ctk.CTkEntry(simple_opts, width=48, placeholder_text="1")
+        self._seq_start_entry.insert(0, "1")
+        self._seq_start_entry.pack(side="left", padx=(4, 8))
+        add_tooltip(self._seq_start_entry, "Starting number for the sequential suffix (default 1)")
+        ctk.CTkLabel(simple_opts, text="Pad:").pack(side="left")
+        self._seq_pad_var = ctk.StringVar(value="3")
+        _pad_menu = ctk.CTkOptionMenu(simple_opts, variable=self._seq_pad_var, values=["1", "2", "3", "4"], width=56)
+        _pad_menu.pack(side="left", padx=4)
+        add_tooltip(_pad_menu, "Number of digits in the suffix (3 = 001, 4 = 0001)")
+
         btn_frame = ctk.CTkFrame(row1, fg_color="transparent")
-        btn_frame.grid(row=0, column=3, rowspan=4, padx=(15, 0))
+        btn_frame.grid(row=0, column=3, rowspan=5, padx=(15, 0))
         _analyze_btn = ctk.CTkButton(btn_frame, text="Analyze (dry run)", width=140, command=self._analyze)
         _analyze_btn.pack(pady=(0, 4))
         add_tooltip(_analyze_btn, "Preview proposed renames using WD14 AI tags without changing any files")
         _prepend_preview_btn = ctk.CTkButton(btn_frame, text="Preview prepend only", width=140, command=self._build_manual_list)
-        _prepend_preview_btn.pack(pady=0)
+        _prepend_preview_btn.pack(pady=(0, 4))
         add_tooltip(_prepend_preview_btn, "Show filenames with only the manual prepend text applied (no AI tagging)")
+        _simple_btn = ctk.CTkButton(btn_frame, text="Preview simple rename", width=140, command=self._build_simple_rename_list)
+        _simple_btn.pack(pady=0)
+        add_tooltip(_simple_btn, "Preview renames using the base name and optional sequential suffix")
 
         # List
         list_frame = ctk.CTkScrollableFrame(self)
@@ -226,6 +254,36 @@ class TabBatchRename(ctk.CTkFrame):
             self._proposals.append((path, proposed_name))
         self._refresh_list()
         messagebox.showinfo("Preview", f"List built for {len(self._proposals)} image(s) (prepend only, no analysis). Review and click Apply renames to commit.")
+
+    def _build_simple_rename_list(self):
+        """Build proposed renames using a fixed base name with an optional sequential suffix."""
+        if not self._folder or not self._folder.is_dir():
+            messagebox.showinfo("Simple rename", "Select a folder first (Browse).")
+            return
+        files = sorted([f for f in self._folder.iterdir() if f.is_file() and f.suffix.lower() in VALID_EXTENSIONS])
+        if not files:
+            messagebox.showwarning("Simple rename", "No .jpg, .png, or .webp images in that folder.")
+            return
+        base = (self._base_name_entry.get() or "").strip()
+        if not base:
+            messagebox.showinfo("Simple rename", "Enter a base name first.")
+            return
+        use_seq = self._seq_suffix_var.get()
+        try:
+            start = int(self._seq_start_entry.get().strip() or "1")
+        except ValueError:
+            start = 1
+        pad = int(self._seq_pad_var.get())
+        self._proposals = []
+        for i, path in enumerate(files):
+            if use_seq:
+                stem = f"{base}_{str(start + i).zfill(pad)}"
+            else:
+                stem = base if len(files) == 1 else f"{base}_{str(start + i).zfill(pad)}"
+            proposed_name = stem + path.suffix.lower()
+            self._proposals.append((path, proposed_name))
+        self._refresh_list()
+        messagebox.showinfo("Preview", f"Simple rename preview for {len(self._proposals)} image(s). Review and click Apply renames to commit.")
 
     def _apply(self):
         if not self._proposals:
