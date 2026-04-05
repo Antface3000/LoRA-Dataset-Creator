@@ -273,7 +273,7 @@ _SECTIONS = [
             "2. In Settings set:\n"
             "     Caption source  = gemini\n"
             "     Gemini API key  = AIza…\n"
-            "     Gemini model    = gemini-2.0-flash   (recommended)\n"
+            "     Gemini model    = gemini-1.5-flash-latest   (recommended)\n"
             "\n"
             "Install dependency:\n"
             "  pip install google-genai\n"

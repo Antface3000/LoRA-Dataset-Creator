@@ -15,7 +15,7 @@ _ANTHROPIC_MODELS = [
     "claude-3-5-haiku-20241022", "claude-3-5-sonnet-20241022",
     "claude-3-opus-20240229",
 ]
-_GEMINI_MODELS = ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"]
+_GEMINI_MODELS = ["gemini-1.5-flash-latest", "gemini-1.5-pro-latest", "gemini-1.0-pro-latest"]
 
 
 def open_settings_dialog(parent, on_applied_callback=None):
@@ -173,7 +173,7 @@ def open_settings_dialog(parent, on_applied_callback=None):
     gem_key_entry.insert(0, backend_cfg.get("gemini_api_key", ""))
     add_tooltip(gem_key_entry, "Your Google Gemini API key — get one at https://aistudio.google.com/app/apikey")
     gem_model_label = ctk.CTkLabel(main, text="Gemini model:")
-    gem_model_var = ctk.StringVar(value=backend_cfg.get("gemini_model", "gemini-2.0-flash"))
+    gem_model_var = ctk.StringVar(value=backend_cfg.get("gemini_model", "gemini-1.5-flash-latest"))
     gem_model_menu = ctk.CTkOptionMenu(main, variable=gem_model_var, values=_GEMINI_MODELS, width=180)
     add_tooltip(gem_model_menu, "Google Gemini model to use")
 

@@ -69,7 +69,7 @@ class ProfilesManager:
                     "anthropic_api_key": "",
                     "anthropic_model": "claude-3-5-haiku-20241022",
                     "gemini_api_key": "",
-                    "gemini_model": "gemini-2.0-flash",
+                    "gemini_model": "gemini-1.5-flash-latest",
                     "padding_margin": DEFAULT_PADDING_MARGIN,
                     "person_confidence": DEFAULT_PERSON_CONFIDENCE,
                     "ui_scaling": 1.0,

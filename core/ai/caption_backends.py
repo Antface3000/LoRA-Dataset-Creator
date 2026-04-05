@@ -288,13 +288,13 @@ class AnthropicBackend(CaptionBackend):
 # ---------------------------------------------------------------------------
 
 class GeminiBackend(CaptionBackend):
-    """Caption via Google Gemini API (gemini-1.5-flash, gemini-2.0-flash, etc.).
+    """Caption via Google Gemini API (gemini-1.5-flash-latest, gemini-1.5-pro-latest, etc.).
 
     Uses the ``google-genai`` SDK (``pip install google-genai``).
     The older ``google-generativeai`` package is no longer compatible.
     """
 
-    def __init__(self, api_key: str, model: str = "gemini-2.0-flash"):
+    def __init__(self, api_key: str, model: str = "gemini-1.5-flash-latest"):
         self.api_key = api_key
         self.model = model
 
@@ -388,7 +388,7 @@ def get_caption_backend(profile: Optional[dict] = None) -> CaptionBackend:
     if source == "gemini":
         return GeminiBackend(
             api_key=p.get("gemini_api_key") or "",
-            model=p.get("gemini_model") or "gemini-2.0-flash",
+            model=p.get("gemini_model") or "gemini-1.5-flash-latest",
         )
 
     # Default: local transformers model
