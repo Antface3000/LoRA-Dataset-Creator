@@ -486,6 +486,9 @@ class StepCaptions(ctk.CTkFrame):
         self._btn_batch_caption = ctk.CTkButton(top, text="Batch caption (all)", width=140, command=self._batch_gen_captions)
         self._btn_batch_caption.pack(side="left", padx=5)
         add_tooltip(self._btn_batch_caption, "Caption every image in the session using the vision model")
+        self._btn_save_edits = ctk.CTkButton(top, text="Save edits", width=90, fg_color="darkgreen", command=self._save_and_confirm)
+        self._btn_save_edits.pack(side="left", padx=(10, 5))
+        add_tooltip(self._btn_save_edits, "Save the current tags and caption edits to the session (auto-saved when switching images)")
         self._loading_label = ctk.CTkLabel(top, text="", text_color="gray70")
         self._loading_label.pack(side="left", padx=(10, 0))
         ctk.CTkLabel(top, text="Output:").pack(side="left", padx=(10, 2))
@@ -585,12 +588,20 @@ class StepCaptions(ctk.CTkFrame):
         if self.on_changed:
             self.on_changed()
 
+    def _save_and_confirm(self):
+        """Save current edits and give brief visual feedback on the button."""
+        self._save_current()
+        self._refresh_list()
+        self._btn_save_edits.configure(text="Saved!", fg_color="green")
+        self.after(1200, lambda: self._btn_save_edits.configure(text="Save edits", fg_color="darkgreen"))
+
     def _set_loading(self, msg: str, busy: bool):
         self._loading_label.configure(text=msg)
         self._btn_tags.configure(state="disabled" if busy else "normal")
         self._btn_caption.configure(state="disabled" if busy else "normal")
         self._btn_batch_tags.configure(state="disabled" if busy else "normal")
         self._btn_batch_caption.configure(state="disabled" if busy else "normal")
+        self._btn_save_edits.configure(state="disabled" if busy else "normal")
 
     # ---- List + preview helpers ----
 
@@ -629,9 +640,10 @@ class StepCaptions(ctk.CTkFrame):
         self._update_preview()
 
     def _on_row_click(self, index: int):
-        """Handle click on a list row."""
+        """Handle click on a list row — save current edits before switching."""
         if index < 0 or index >= len(self.session.items):
             return
+        self._save_current()
         self._selected_index_caption = index
         self.current_index = index
         self.index_var.set(str(index + 1))

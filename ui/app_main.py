@@ -115,6 +115,16 @@ class App:
         batch_tab.grid_rowconfigure(0, weight=1)
         TabBatchRename(batch_tab).grid(row=0, column=0, sticky="nsew")
 
+    def _import_crop_queue_into_session(self):
+        """Pull any paths the Crop & Sort tab queued into the wizard session."""
+        queue = list(self.pipeline_manager.caption_queue)
+        if not queue:
+            return
+        self.pipeline_manager.caption_queue.clear()
+        added = self.session.add_items(queue)
+        if added and hasattr(self.step_frames[1], "_refresh_list"):
+            self.step_frames[1]._refresh_list()
+
     def _show_step(self, step: int):
         self.current_step = step
         for i, f in enumerate(self.step_frames):
@@ -133,6 +143,8 @@ class App:
                 self._caption_models_prewarmed = True
         else:
             vram.ensure_state(State.IDLE)
+        if step == 1:
+            self._import_crop_queue_into_session()
 
     def _on_tab_changed(self, tab_name: str):
         """Called whenever the user clicks a main tab. Reset Wizard to step 1."""

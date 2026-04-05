@@ -133,7 +133,7 @@ def _llama_finalize_caption(tags: list, vision_description: str, user_prompt: st
     try:
         response = llama.create_chat_completion(
             messages=messages,
-            max_tokens=150,
+            max_tokens=512,
             temperature=0.3,
             stop=["</s>", "\nUSER:", "\n\n\n"],
         )
@@ -605,7 +605,7 @@ class JoyCaption:
                 })
                 response = self.model.create_chat_completion(
                     messages=messages,
-                    max_tokens=150,
+                    max_tokens=512,
                     temperature=0.7,
                     stop=["</s>", "USER:", "ASSISTANT:", "\nUSER:", "\nASSISTANT:"]
                 )
@@ -618,7 +618,7 @@ class JoyCaption:
             if is_florence2:
                 inputs = self.processor(images=image, text="<describe>", return_tensors="pt").to(device)
                 with torch.no_grad():
-                    outputs = self.model.generate(**inputs, max_new_tokens=150, do_sample=True, temperature=0.7)
+                    outputs = self.model.generate(**inputs, max_new_tokens=512, do_sample=True, temperature=0.7)
                 caption = self.processor.decode(outputs[0], skip_special_tokens=True).replace("<describe>", "").strip()
             else:
                 if is_llava:
@@ -627,7 +627,7 @@ class JoyCaption:
                 else:
                     inputs = self.processor(images=image, text=prompt_text, return_tensors="pt").to(device)
                 with torch.no_grad():
-                    outputs = self.model.generate(**inputs, max_new_tokens=150, do_sample=True, temperature=0.7, top_p=0.9)
+                    outputs = self.model.generate(**inputs, max_new_tokens=512, do_sample=True, temperature=0.7, top_p=0.9)
                 caption = self.processor.decode(outputs[0], skip_special_tokens=True) if hasattr(self.processor, "decode") else self.processor.batch_decode(outputs, skip_special_tokens=True)[0]
                 if "ASSISTANT:" in caption:
                     caption = caption.split("ASSISTANT:")[-1].strip()
