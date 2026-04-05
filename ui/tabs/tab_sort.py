@@ -1,5 +1,6 @@
 """Sorting/Cropping Tab - Filter/Sort/Crop Interface (VIEW ONLY, delegates to core)."""
 
+import shutil
 import customtkinter as ctk
 from tkinter import messagebox
 from pathlib import Path
@@ -44,6 +45,7 @@ class SortTab(ctk.CTkFrame):
         self.drag_mode = None
         self.drag_start_x, self.drag_start_y = 0, 0
         self.current_bucket = 'square'
+        self._current_person = None  # cached YOLO result for the loaded image
         self.padding_margin = 50
         self.person_confidence = 0.15
         self.auto_bucket_enabled = False
@@ -185,17 +187,16 @@ class SortTab(ctk.CTkFrame):
         )
     
     def on_bucket_change(self):
-        """Handle bucket change: recompute crop box for new aspect ratio and refresh."""
-        self.current_bucket = self.bucket_var.get()
-        if self.original_image is not None and self.image_files and self.current_index < len(self.image_files):
-            image_path = self.image_files[self.current_index]
-            _, _, _, crop_coords = load_and_process_image(
-                image_path,
-                self.vram_manager,
-                self.person_confidence,
+        """Handle bucket change: recompute crop box using cached person, no YOLO re-run."""
+        new_bucket = self.bucket_var.get()
+        self.current_bucket = new_bucket
+        if self.original_image is not None and new_bucket != "no_crop":
+            from core.ai.cropper import calculate_crop_box
+            crop_coords = calculate_crop_box(
+                self.original_image,
+                self._current_person,
+                new_bucket,
                 self.padding_margin,
-                self.current_bucket,
-                auto_bucket_enabled=self.auto_bucket_enabled,
             )
             self.crop_x1, self.crop_y1, self.crop_x2, self.crop_y2 = crop_coords
         self.update_display()
@@ -216,7 +217,10 @@ class SortTab(ctk.CTkFrame):
             self.current_bucket,
             auto_bucket_enabled=self.auto_bucket_enabled,
         )
-        
+
+        # Cache person so on_bucket_change can recalculate without re-running YOLO
+        self._current_person = person
+
         # Update state
         self.current_bucket = selected_bucket
         self.bucket_var.set(selected_bucket)
@@ -292,13 +296,25 @@ class SortTab(ctk.CTkFrame):
         if not self.image_files or self.current_index >= len(self.image_files):
             return
         try:
-            crop_coords = (int(self.crop_x1), int(self.crop_y1), int(self.crop_x2), int(self.crop_y2))
-            if crop_coords[2] <= crop_coords[0] or crop_coords[3] <= crop_coords[1]:
-                messagebox.showerror("Error", "Invalid crop region.")
-                return
-            cropped = self.original_image.crop(crop_coords)
-            resized = resize_to_bucket(cropped, self.current_bucket)
-            saved_path = save_cropped_image_flat(resized, self.output_folder, self.current_bucket, self.image_files[self.current_index].stem)
+            src_path = self.image_files[self.current_index]
+
+            if self.current_bucket == "no_crop":
+                # Pass the original file through unchanged
+                dest = Path(self.output_folder) / src_path.name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src_path, dest)
+                saved_path = dest
+            else:
+                crop_coords = (int(self.crop_x1), int(self.crop_y1), int(self.crop_x2), int(self.crop_y2))
+                if crop_coords[2] <= crop_coords[0] or crop_coords[3] <= crop_coords[1]:
+                    messagebox.showerror("Error", "Invalid crop region.")
+                    return
+                cropped = self.original_image.crop(crop_coords)
+                resized = resize_to_bucket(cropped, self.current_bucket)
+                saved_path = save_cropped_image_flat(
+                    resized, self.output_folder, self.current_bucket, src_path.stem
+                )
+
             self.pipeline_manager.add_to_caption_queue(saved_path)
             self.current_index += 1
             if self.current_index >= len(self.image_files):

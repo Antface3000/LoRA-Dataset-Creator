@@ -50,10 +50,18 @@ def create_control_panel(parent) -> tuple[ctk.CTkScrollableFrame, dict]:
     bucket_var = ctk.StringVar(value="square")
     for bucket in ['portrait', 'square', 'landscape']:
         w, h = BUCKETS[bucket]
-        rb = ctk.CTkRadioButton(bucket_frame, text=f"{bucket.title()} ({w}x{h})",
+        rb = ctk.CTkRadioButton(bucket_frame, text=f"{bucket.title()} ({w}×{h})",
                                 variable=bucket_var, value=bucket)
         rb.pack(anchor="w", padx=20, pady=2)
         add_tooltip(rb, f"Crop and resize the image to the {bucket} bucket ({w}×{h} px)")
+    no_crop_rb = ctk.CTkRadioButton(
+        bucket_frame,
+        text="No crop  (pass through at original size)",
+        variable=bucket_var,
+        value="no_crop",
+    )
+    no_crop_rb.pack(anchor="w", padx=20, pady=(6, 2))
+    add_tooltip(no_crop_rb, "Copy this image to the output folder at its original resolution without any crop or resize")
     widgets['bucket_var'] = bucket_var
     
     # Crop info

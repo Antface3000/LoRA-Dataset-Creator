@@ -167,6 +167,22 @@ def auto_select_bucket(person_aspect_ratio: Optional[float]) -> str:
     return min(distances, key=distances.get)
 
 
+def detect_bucket_from_dimensions(width: int, height: int) -> str:
+    """Return the best-matching bucket name based on image aspect ratio.
+
+    Uses ~15 % tolerance around square so minor variations don't flip bucket.
+    portrait  → ratio < 0.87  (e.g. 832×1216 ≈ 0.68)
+    landscape → ratio > 1.15  (e.g. 1216×832 ≈ 1.46)
+    square    → everything in between
+    """
+    ratio = width / height if height else 1.0
+    if ratio > 1.15:
+        return "landscape"
+    if ratio < 0.87:
+        return "portrait"
+    return "square"
+
+
 def calculate_crop_box(
     image: Image.Image,
     person: Optional[PersonDetection],
@@ -188,72 +204,40 @@ def calculate_crop_box(
     target_w, target_h = BUCKETS[bucket]
     target_aspect = target_w / target_h
     
+    # Compute desired crop dimensions from target aspect ratio
+    if target_aspect > 1:  # Landscape
+        crop_width = img_height * target_aspect - (padding * 2)
+        crop_height = crop_width / target_aspect
+    elif target_aspect < 1:  # Portrait
+        crop_height = img_width / target_aspect - (padding * 2)
+        crop_width = crop_height * target_aspect
+    else:  # Square
+        crop_size = min(img_width, img_height) - (padding * 2)
+        crop_width = crop_size
+        crop_height = crop_size
+
+    crop_width = max(100, crop_width)
+    crop_height = max(100, crop_height)
+
+    # Scale down proportionally if the desired crop exceeds image bounds —
+    # this preserves the target aspect ratio even at image edges.
+    if crop_width > img_width or crop_height > img_height:
+        fit_scale = min(img_width / crop_width, img_height / crop_height)
+        crop_width *= fit_scale
+        crop_height *= fit_scale
+
     if person is not None:
-        # Center crop on person with padding
         center_x, center_y = person.center_x, person.center_y
-        
-        # Calculate crop size based on target aspect ratio
-        if target_aspect > 1:  # Landscape
-            crop_width = min(img_width, img_height * target_aspect) - (padding * 2)
-            crop_height = crop_width / target_aspect
-        elif target_aspect < 1:  # Portrait
-            crop_height = min(img_height, img_width / target_aspect) - (padding * 2)
-            crop_width = crop_height * target_aspect
-        else:  # Square
-            crop_size = min(img_width, img_height) - (padding * 2)
-            crop_width = crop_size
-            crop_height = crop_size
-        
-        crop_width = max(100, crop_width)
-        crop_height = max(100, crop_height)
-        
-        half_w = crop_width / 2
-        half_h = crop_height / 2
-        
-        crop_x1 = max(0, center_x - half_w)
-        crop_y1 = max(0, center_y - half_h)
-        crop_x2 = min(img_width, center_x + half_w)
-        crop_y2 = min(img_height, center_y + half_h)
-        
-        # Adjust if we hit boundaries
-        if crop_x2 - crop_x1 < crop_width:
-            if crop_x1 == 0:
-                crop_x2 = min(img_width, crop_width)
-            else:
-                crop_x1 = max(0, img_width - crop_width)
-        
-        if crop_y2 - crop_y1 < crop_height:
-            if crop_y1 == 0:
-                crop_y2 = min(img_height, crop_height)
-            else:
-                crop_y1 = max(0, img_height - crop_height)
-        
-        return (int(crop_x1), int(crop_y1), int(crop_x2), int(crop_y2))
     else:
-        # Center crop fallback
-        if target_aspect > 1:  # Landscape
-            crop_width = min(img_width, img_height * target_aspect)
-            crop_height = crop_width / target_aspect
-        elif target_aspect < 1:  # Portrait
-            crop_height = min(img_height, img_width / target_aspect)
-            crop_width = crop_height * target_aspect
-        else:  # Square
-            crop_size = min(img_width, img_height)
-            crop_width = crop_size
-            crop_height = crop_size
-        
-        crop_x1 = max(0, (img_width - crop_width) / 2)
-        crop_y1 = max(0, (img_height - crop_height) / 2)
-        crop_x2 = min(img_width, crop_x1 + crop_width)
-        crop_y2 = min(img_height, crop_y1 + crop_height)
-        
-        # Ensure valid crop dimensions
-        if crop_x2 <= crop_x1:
-            crop_x2 = crop_x1 + min(100, img_width - crop_x1)
-        if crop_y2 <= crop_y1:
-            crop_y2 = crop_y1 + min(100, img_height - crop_y1)
-        
-        return (int(crop_x1), int(crop_y1), int(crop_x2), int(crop_y2))
+        center_x, center_y = img_width / 2, img_height / 2
+
+    # Center on subject, clamped so the box never exits the image
+    crop_x1 = max(0, min(img_width - crop_width, center_x - crop_width / 2))
+    crop_y1 = max(0, min(img_height - crop_height, center_y - crop_height / 2))
+    crop_x2 = crop_x1 + crop_width
+    crop_y2 = crop_y1 + crop_height
+
+    return (int(crop_x1), int(crop_y1), int(crop_x2), int(crop_y2))
 
 
 def resize_to_bucket(image: Image.Image, bucket: str) -> Image.Image:

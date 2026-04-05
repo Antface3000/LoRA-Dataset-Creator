@@ -5,6 +5,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-04-05
+
+### Fixed
+
+- **Crop box squashes when switching bucket** — Switching portrait/square/landscape
+  radio buttons distorted the yellow crop rectangle because X and Y boundary clamping
+  were done independently, breaking the target aspect ratio. The clamping logic in
+  `calculate_crop_box` now scales the crop box proportionally to fit the image before
+  centering, so the aspect ratio is always preserved.
+
+- **YOLO re-ran on every radio button click** — Switching the bucket previously
+  re-triggered the full YOLO person detection pipeline. The detected person is now
+  cached on `SortTab` and `on_bucket_change` calls `calculate_crop_box` directly,
+  making bucket switching instant.
+
+### Added
+
+- **Auto-detect portrait/landscape/square from image dimensions** — Each image's own
+  aspect ratio now determines the default bucket selection when it loads, instead of
+  always defaulting to square. YOLO person detection still overrides this when
+  "Auto bucket" is enabled and a person is found.
+
+- **"No crop (pass through)" option** — A new radio button in the Crop & Sort bucket
+  panel. When selected, clicking Save & Next copies the original file to the output
+  folder at its native resolution without any crop or resize, then adds it to the
+  caption queue as normal.
+
+---
+
 ## [v0.2.0] — 2026-03-31
 
 ### Fixed
