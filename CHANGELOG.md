@@ -7,6 +7,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] — 2026-04-05
 
+### Changed
+
+- **Google Gemini backend migrated to `google-genai`** — The `google-generativeai`
+  package is deprecated and no longer compatible with the Gemini API. The backend now
+  uses the official Google Gen AI SDK (`google-genai`). Update your environment:
+  ```
+  pip uninstall google-generativeai
+  pip install google-genai
+  ```
+  The API call is now client-based (`genai.Client(api_key=…)`) and images are sent as
+  JPEG bytes via `types.Part.from_bytes`, making the integration more robust.
+  `requirements.txt`, the README, and the in-app tutorial have all been updated.
+
+- **NudeNet toggle in Settings** — Body-part detection controls are now hidden by
+  default. Enable them per-profile via **Settings → Smart Detection → Enable NudeNet
+  body-part detection** (requires `pip install nudenet`). The setting is saved to each
+  profile so different projects can have different preferences.
+
+- **UI layout — top control bar** — The Crop & Sort top bar is split into two rows
+  (folder buttons / quality sliders) so all controls are visible at the default window
+  size without horizontal clipping.
+
+- **Default window size** — Increased from 1000 × 800 to 1280 × 860 (minimum 1050 × 650)
+  to accommodate the full control bar without requiring manual resizing.
+
+- **Step indicator hidden on non-Wizard tabs** — The "Step X of 4 – …" label in the
+  header is now only shown when the Wizard tab is active.
+
 ### Fixed
 
 - **TypeError when switching tabs** — `CTkTabview`'s command callback passes no

@@ -35,9 +35,9 @@ class App:
         ctk.set_appearance_mode(profile.get("appearance_mode", "dark"))
         self.root = ctk.CTk()
         self.root.title("LoRA Dataset Manager")
-        self.root.minsize(800, 600)
-        self.root.geometry("1000x800")
-        self.root.after(100, lambda: self.root.geometry("1000x800"))
+        self.root.minsize(1050, 650)
+        self.root.geometry("1280x860")
+        self.root.after(100, lambda: self.root.geometry("1280x860"))
         self.current_step = 0
         self.step_frames = []
         self.step_names = ["Directories", "Images", "Tags & Captions", "Finalize"]
@@ -74,7 +74,8 @@ class App:
         add_tooltip(_tutorial_btn, "Open the getting-started tutorial")
         step_font_size = max(10, int(12 * self.get_text_scale()))
         self.step_label = ctk.CTkLabel(menu_frame, text="Step 1 of 4 – Directories", font=ctk.CTkFont(size=step_font_size))
-        self.step_label.pack(side="left", padx=20)
+        # hidden until the Wizard tab is active
+        self.step_label.pack_forget()
 
         self.tabview = ctk.CTkTabview(self.root, width=900, command=self._on_tab_changed)
         self.tabview.pack(fill="both", expand=True, padx=10, pady=(0, 0))
@@ -159,9 +160,21 @@ class App:
             self._import_crop_queue_into_session()
 
     def _on_tab_changed(self):
-        """Called whenever the user clicks a main tab. Reset Wizard to step 1."""
-        if self.tabview.get() == "Wizard":
+        """Called whenever the user clicks a main tab."""
+        tab = self.tabview.get()
+        if tab == "Wizard":
+            self.step_label.pack(side="left", padx=20)
             self._show_step(0)
+        else:
+            self.step_label.pack_forget()
+
+        if tab == "Crop & Sort":
+            # If the sort tab has an image list ready but hasn't loaded
+            # the first image yet (e.g. after a profile load), kick it off now.
+            if (hasattr(self, "_sort_tab")
+                    and self._sort_tab.image_files
+                    and self._sort_tab.original_image is None):
+                self._sort_tab.load_current_image()
 
     def _back(self):
         if self.current_step > 0:
@@ -265,6 +278,20 @@ class App:
                 self.step_frames[2].apply_profile(profile)
         if hasattr(self, "_sort_tab"):
             self._sort_tab.apply_profile(profile)
+            self._sort_tab.apply_nudenet_visibility()
+            # Sync source/output folders so the tab can work without the user
+            # having to re-select them manually after loading a profile.
+            from core.data.file_handler import load_image_files
+            pm_src = self.pipeline_manager.source_folder
+            pm_out = self.pipeline_manager.output_folder
+            if pm_out:
+                self._sort_tab.output_folder = pm_out
+            if pm_src and pm_src.exists():
+                if self._sort_tab.source_folder != pm_src:
+                    self._sort_tab.source_folder = pm_src
+                    all_files = load_image_files(pm_src)
+                    self._sort_tab.image_files = self._sort_tab._get_remaining_files(all_files)
+                    self._sort_tab.current_index = 0
         # Refresh finalize summary only if we're on the finalize step.
         self._refresh_finalize_summary()
 

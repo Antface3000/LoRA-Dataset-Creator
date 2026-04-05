@@ -276,7 +276,10 @@ _SECTIONS = [
             "     Gemini model    = gemini-2.0-flash   (recommended)\n"
             "\n"
             "Install dependency:\n"
-            "  pip install google-generativeai\n"
+            "  pip install google-genai\n"
+            "\n"
+            "Note: the older 'google-generativeai' package is no longer compatible.\n"
+            "Use 'google-genai' (the official Google Gen AI SDK).\n"
             "\n"
             "Free tier: 15 requests/min, 1 500 requests/day (as of 2026).",
         ],

@@ -10,3 +10,13 @@ onnxruntime>=1.15.0
 huggingface_hub>=0.20.0
 pandas>=2.0.0
 
+# Optional — install only what you need:
+# Google Gemini captioning backend
+# google-genai
+# NudeNet body-part detection
+# nudenet
+# OpenAI captioning backend
+# openai
+# Anthropic captioning backend
+# anthropic
+

@@ -67,6 +67,23 @@ def open_settings_dialog(parent, on_applied_callback=None):
     add_tooltip(appearance_menu, "Switch between dark, light, or system color theme")
     row += 1
 
+    # ── Smart Detection ────────────────────────────────────────────────────
+    row += 1
+    ctk.CTkLabel(main, text="Smart Detection", font=ctk.CTkFont(weight="bold")).grid(row=row, column=0, columnspan=3, sticky="w", pady=(15, 5))
+    row += 1
+    nudenet_var = ctk.BooleanVar(value=bool(profile.get("enable_nudenet", False)))
+    nudenet_cb = ctk.CTkCheckBox(main, text="Enable NudeNet body-part detection", variable=nudenet_var)
+    nudenet_cb.grid(row=row, column=0, columnspan=3, sticky="w", pady=3)
+    add_tooltip(nudenet_cb,
+                "Show body-part detection controls on the Crop & Sort tab.\n"
+                "Requires the 'nudenet' package to be installed.\n"
+                "Off by default — toggle on and save to enable per-profile.")
+    row += 1
+    ctk.CTkLabel(main,
+                 text="Install: pip install nudenet    (off by default)",
+                 wraplength=420, text_color="gray60").grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 8))
+    row += 1
+
     # ── Caption / LLM defaults ──────────────────────────────────────────────
     row += 1
     ctk.CTkLabel(main, text="Caption / LLM defaults", font=ctk.CTkFont(weight="bold")).grid(row=row, column=0, columnspan=3, sticky="w", pady=(15, 5))
@@ -301,6 +318,7 @@ def open_settings_dialog(parent, on_applied_callback=None):
         current["default_find_replace"] = fr_pairs
         current["default_output_format"] = output_format_var.get()
         current["caption_system_prompt"] = system_prompt_text.get("1.0", "end-1c").strip()
+        current["enable_nudenet"] = nudenet_var.get()
         # Backend settings
         current["caption_source"] = source_var.get()
         current["caption_local_model"] = local_var.get()

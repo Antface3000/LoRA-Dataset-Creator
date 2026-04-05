@@ -288,7 +288,11 @@ class AnthropicBackend(CaptionBackend):
 # ---------------------------------------------------------------------------
 
 class GeminiBackend(CaptionBackend):
-    """Caption via Google Gemini API (gemini-1.5-flash, gemini-2.0-flash, etc.)."""
+    """Caption via Google Gemini API (gemini-1.5-flash, gemini-2.0-flash, etc.).
+
+    Uses the ``google-genai`` SDK (``pip install google-genai``).
+    The older ``google-generativeai`` package is no longer compatible.
+    """
 
     def __init__(self, api_key: str, model: str = "gemini-2.0-flash"):
         self.api_key = api_key
@@ -302,22 +306,35 @@ class GeminiBackend(CaptionBackend):
         system_prompt: Optional[str] = None,
     ) -> str:
         try:
-            import google.generativeai as genai
+            from google import genai
+            from google.genai import types as genai_types
         except ImportError:
             logger.error(
-                "GeminiBackend requires the 'google-generativeai' package: "
-                "pip install google-generativeai"
+                "GeminiBackend requires the 'google-genai' package: "
+                "pip install google-genai"
             )
             return ""
         try:
-            genai.configure(api_key=self.api_key)
-            model = genai.GenerativeModel(
-                self.model,
-                system_instruction=system_prompt or None,
-            )
+            import io
+            client = genai.Client(api_key=self.api_key)
             img = Image.open(image_path).convert("RGB")
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG")
+            img_bytes = buf.getvalue()
             user_text = self._build_user_text(tags, prompt)
-            response = model.generate_content([user_text, img])
+            contents: list = [
+                genai_types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"),
+                user_text,
+            ]
+            config_kwargs: dict = {}
+            if system_prompt:
+                config_kwargs["system_instruction"] = system_prompt
+            cfg = genai_types.GenerateContentConfig(**config_kwargs) if config_kwargs else None
+            response = client.models.generate_content(
+                model=self.model,
+                contents=contents,
+                config=cfg,
+            )
             return (response.text or "").strip()
         except Exception as exc:
             logger.error("GeminiBackend.generate failed: %s", exc)

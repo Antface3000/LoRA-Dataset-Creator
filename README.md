@@ -49,7 +49,7 @@ The app will launch. No AI models are required to start — download only what y
 | Ollama (local server) | `pip install requests` |
 | OpenAI (GPT-4o, etc.) | `pip install openai` |
 | Anthropic (Claude) | `pip install anthropic` |
-| Google Gemini | `pip install google-generativeai` |
+| Google Gemini | `pip install google-genai` |
 
 You can install any of these at any time — the app will show an error message if a required package is missing when you test the connection. Full setup instructions for each backend are in [Caption API Backends](#caption-api-backends) below.
 
@@ -164,7 +164,9 @@ Cost: ~$0.002–$0.005 per image with `gpt-4o`.
 
 ### `gemini` — Google Gemini
 
-**Requires:** `pip install google-generativeai` *(see [Installation](#installation))*
+**Requires:** `pip install google-genai` *(see [Installation](#installation))*
+
+> **Note:** The older `google-generativeai` package is no longer compatible. Use `google-genai` (the official Google Gen AI SDK).
 
 Free tier: 15 requests/min, 1 500 requests/day (as of 2026).
 

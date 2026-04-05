@@ -77,7 +77,8 @@ class ProfilesManager:
                     "text_scale": 1.0,
                     "default_trigger_words": "",
                     "default_find_replace": [],
-                    "default_output_format": "Natural language"
+                    "default_output_format": "Natural language",
+                    "enable_nudenet": False
                 }
             },
             "current_profile": "User settings",
