@@ -28,9 +28,12 @@ def load_and_process_image(
     Returns:
         (image, person, selected_bucket, crop_coords) tuple
     """
-    # Load image
+    # Load image — call .load() immediately so PIL releases the OS file handle.
+    # Without this, Windows raises WinError 32 when save_and_next tries to
+    # copy the same file with shutil.copy2 while PIL still holds it open.
     image = Image.open(image_path)
-    
+    image.load()
+
     # Detect person and pick bucket.
     # Baseline: classify by the image's own aspect ratio so portrait/landscape
     # images are never wrongly pre-selected as square.
@@ -43,18 +46,15 @@ def load_and_process_image(
     if auto_bucket_enabled and person is not None:
         selected_bucket = auto_select_bucket(person.aspect_ratio)
 
-    # Manual override: if the user has already picked a non-default bucket
-    # for this session (current_bucket was set by the user, not auto), keep it.
-    # We detect "manual" by checking if current_bucket differs from what
-    # dimension-detection would choose — the radio button trace will have
-    # already updated current_bucket before this call on bucket-change events,
-    # but on initial load current_bucket is still the previous image's bucket
-    # (or the default 'square'), so we prefer the dimension-based result there.
-    # Rule: only honour current_bucket if it matches no_crop (explicit skip).
+    # Manual override: only honour current_bucket if it is the explicit
+    # no_crop selection — everything else uses dimension/YOLO detection.
     if current_bucket == "no_crop":
         selected_bucket = "no_crop"
-    
-    # Calculate initial crop for selected bucket (person still used for center if detected)
-    crop_coords = calculate_crop_box(image, person, selected_bucket, padding_margin)
-    
+
+    # Guard: calculate_crop_box has no "no_crop" entry in BUCKETS, so skip it.
+    if selected_bucket == "no_crop":
+        crop_coords = (0, 0, image.width, image.height)
+    else:
+        crop_coords = calculate_crop_box(image, person, selected_bucket, padding_margin)
+
     return image, person, selected_bucket, crop_coords

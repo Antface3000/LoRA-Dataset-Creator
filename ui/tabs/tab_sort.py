@@ -14,7 +14,7 @@ from core.data.file_handler import load_image_files, save_cropped_image_flat, cr
 from core.config import BUCKETS
 from ui.tabs.tab_sort_canvas import CanvasHelper
 from ui.tabs.tab_sort_quality import run_quality_filter_batch
-from ui.tabs.tab_sort_display import create_crop_overlay
+from ui.tabs.tab_sort_display import create_crop_overlay, create_plain_display
 from ui.tabs.tab_sort_image import load_and_process_image
 from ui.tabs.tab_sort_ui import create_canvas_frame, create_control_panel, create_top_controls, select_folder_dialog
 from ui.tabs.tab_sort_handlers import handle_canvas_click, handle_canvas_drag
@@ -232,25 +232,32 @@ class SortTab(ctk.CTkFrame):
         self.update_display()
     
     def update_display(self):
-        """Update canvas display with crop overlay."""
+        """Update canvas display with crop overlay (or plain image for no-crop)."""
         if not self.original_image:
             return
-        
+
         canvas_width  = self.canvas.winfo_width()  if self.canvas.winfo_width()  > 1 else 800
         canvas_height = self.canvas.winfo_height() if self.canvas.winfo_height() > 1 else 600
-        
-        # Create overlay using helper
-        self.current_photo = create_crop_overlay(
-            self.original_image,
-            self.crop_x1, self.crop_y1, self.crop_x2, self.crop_y2,
-            canvas_width, canvas_height
-        )
-        
+
+        if self.current_bucket == "no_crop":
+            self.current_photo = create_plain_display(
+                self.original_image, canvas_width, canvas_height
+            )
+            self.crop_size_label.configure(
+                text=f"No crop  ({self.original_image.width}×{self.original_image.height})"
+            )
+        else:
+            self.current_photo = create_crop_overlay(
+                self.original_image,
+                self.crop_x1, self.crop_y1, self.crop_x2, self.crop_y2,
+                canvas_width, canvas_height
+            )
+            self.crop_size_label.configure(
+                text=f"Crop: {int(self.crop_x2-self.crop_x1)}×{int(self.crop_y2-self.crop_y1)}"
+            )
+
         self.canvas.delete("all")
         self.canvas.create_image(canvas_width // 2, canvas_height // 2, anchor="center", image=self.current_photo)
-        
-        # Update crop info
-        self.crop_size_label.configure(text=f"Crop: {int(self.crop_x2-self.crop_x1)}x{int(self.crop_y2-self.crop_y1)}")
     
     def on_canvas_click(self, event):
         """Handle canvas click: set drag mode and grab so drag continues past canvas border."""

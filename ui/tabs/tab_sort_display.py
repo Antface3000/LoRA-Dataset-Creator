@@ -70,6 +70,21 @@ def create_crop_overlay(
     return ImageTk.PhotoImage(overlay.convert("RGB"))
 
 
+def create_plain_display(
+    original_image: Image.Image,
+    canvas_width: int,
+    canvas_height: int,
+) -> ImageTk.PhotoImage:
+    """Create a display image scaled to fit the canvas with no crop overlay.
+
+    Used when the 'No crop (pass through)' bucket is active.
+    """
+    scale = min(canvas_width / original_image.width, canvas_height / original_image.height, 1.0)
+    display_size = (int(original_image.width * scale), int(original_image.height * scale))
+    display_image = original_image.resize(display_size, Image.Resampling.LANCZOS)
+    return ImageTk.PhotoImage(display_image.convert("RGB"))
+
+
 def clamp_crop_to_bounds(
     crop_x1: float, crop_y1: float, crop_x2: float, crop_y2: float,
     img_width: int, img_height: int

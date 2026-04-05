@@ -9,6 +9,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **TypeError when switching tabs** — `CTkTabview`'s command callback passes no
+  arguments, but `_on_tab_changed` expected a `tab_name` parameter. Fixed by
+  removing the parameter and reading the active tab via `self.tabview.get()`.
+
+- **WinError 32 when saving with "No crop"** — PIL lazy-loads images and keeps the
+  OS file handle open, causing a Windows sharing violation when `shutil.copy2`
+  tried to copy the same file. Fixed by calling `image.load()` immediately after
+  `Image.open()` to force PIL to read the data into memory and release the handle.
+
+- **`KeyError` on `BUCKETS["no_crop"]`** — `calculate_crop_box` looked up the bucket
+  name in the `BUCKETS` dict, which has no entry for `"no_crop"`. The call is now
+  guarded; when `no_crop` is selected the full image bounds are used as crop coords.
+
+- **Crop overlay not clearing when "No crop" selected** — The canvas still showed
+  the yellow crop rectangle after switching to No crop. The display now branches:
+  when `no_crop` is active the canvas shows a plain scaled image with no darkening
+  or handles, and the crop info label reads the native resolution instead.
+
 - **Crop box squashes when switching bucket** — Switching portrait/square/landscape
   radio buttons distorted the yellow crop rectangle because X and Y boundary clamping
   were done independently, breaking the target aspect ratio. The clamping logic in

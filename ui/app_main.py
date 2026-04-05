@@ -158,9 +158,9 @@ class App:
         if step == 1:
             self._import_crop_queue_into_session()
 
-    def _on_tab_changed(self, tab_name: str):
+    def _on_tab_changed(self):
         """Called whenever the user clicks a main tab. Reset Wizard to step 1."""
-        if tab_name == "Wizard":
+        if self.tabview.get() == "Wizard":
             self._show_step(0)
 
     def _back(self):
