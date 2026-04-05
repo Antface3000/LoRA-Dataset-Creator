@@ -340,9 +340,12 @@ class SortTab(ctk.CTkFrame):
             messagebox.showwarning("Warning", "No images found in source folder.")
             return
         bucket = self.bucket_var.get() if hasattr(self, 'bucket_var') else self.current_bucket
-        try:
-            self.status_label.configure(text=f"Cropping {len(files)} images...")
-            self.update_idletasks()
+        total = len(files)
+        self.status_label.configure(text=f"Auto crop starting — {total} image(s)…")
+
+        def work():
+            from ui.app_main import set_status, set_progress
+            set_status(f"Auto-cropping {total} image(s)…", busy=True)
             outputs = self.pipeline_manager.process_stage2_cropping_batch(
                 files,
                 output,
@@ -351,15 +354,29 @@ class SortTab(ctk.CTkFrame):
                 padding=self.padding_margin,
                 auto_bucket=self.auto_bucket_enabled,
                 yolo_batch_size=8,
+                progress_callback=lambda i: set_progress(i, total, f"Cropping {i}/{total}…"),
             )
-            queued = 0
             for out_path in outputs:
                 self.pipeline_manager.add_to_caption_queue(out_path)
-                queued += 1
-        except Exception as e:
+            set_status("Ready")
+            return len(outputs)
+
+        def on_done(queued):
+            self.status_label.configure(text=f"Auto crop complete. {queued} image(s) queued.")
+            messagebox.showinfo("Auto crop complete", f"Cropped {queued} image(s). Switch to the Wizard tab to continue.")
+
+        def on_error(e):
+            from ui.app_main import set_status
+            set_status("Ready")
             self.status_label.configure(text=f"Auto crop error: {e}")
-            self.update_idletasks()
             messagebox.showerror("Auto crop error", f"Failed batch crop: {e}")
-            return
-        self.status_label.configure(text=f"Auto crop complete. {queued} image(s) queued for captioning.")
-        messagebox.showinfo("Auto crop complete", f"Cropped {queued} image(s). They are in the caption queue.")
+
+        def run():
+            try:
+                queued = work()
+                self.after(0, lambda: on_done(queued))
+            except Exception as e:
+                self.after(0, lambda: on_error(e))
+
+        import threading
+        threading.Thread(target=run, daemon=True).start()

@@ -45,6 +45,8 @@ class App:
         self.setup_ui()
         self.load_profile_settings()
         self._show_step(0)
+        global _app
+        _app = self
 
     def setup_ui(self):
         menu_frame = ctk.CTkFrame(self.root)
@@ -75,7 +77,17 @@ class App:
         self.step_label.pack(side="left", padx=20)
 
         self.tabview = ctk.CTkTabview(self.root, width=900, command=self._on_tab_changed)
-        self.tabview.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self.tabview.pack(fill="both", expand=True, padx=10, pady=(0, 0))
+
+        # Global status bar — always visible at the bottom of the window
+        status_bar = ctk.CTkFrame(self.root, height=28, corner_radius=0)
+        status_bar.pack(fill="x", side="bottom", padx=0, pady=0)
+        status_bar.pack_propagate(False)
+        self._status_progress = ctk.CTkProgressBar(status_bar, width=140, height=10, mode="indeterminate")
+        self._status_progress.pack(side="left", padx=(10, 6), pady=9)
+        self._status_progress.set(0)
+        self._status_label = ctk.CTkLabel(status_bar, text="Ready", text_color="gray70", anchor="w")
+        self._status_label.pack(side="left", fill="x", expand=True, padx=(0, 10))
         self.tabview.add("Batch rename (WD14)")
         self.tabview.add("Crop & Sort")
         self.tabview.add("Wizard")
@@ -256,13 +268,58 @@ class App:
         # Refresh finalize summary only if we're on the finalize step.
         self._refresh_finalize_summary()
 
+    def set_global_status(self, message: str, busy: bool = False):
+        """Update the global status bar. Call from any thread via root.after(0, ...)."""
+        self._status_label.configure(text=message)
+        if busy:
+            self._status_progress.configure(mode="indeterminate")
+            self._status_progress.start()
+        else:
+            self._status_progress.stop()
+            self._status_progress.configure(mode="determinate")
+            self._status_progress.set(0)
+
+    def set_global_progress(self, current: int, total: int, message: str = ""):
+        """Show a determinate progress bar (current/total) with optional message."""
+        fraction = current / total if total > 0 else 0
+        self._status_progress.stop()
+        self._status_progress.configure(mode="determinate")
+        self._status_progress.set(fraction)
+        label = message or f"{current}/{total}"
+        self._status_label.configure(text=label)
+
     def run(self):
         self.root.mainloop()
 
 
+# Module-level singleton reference — set once App() is constructed
+_app: "App | None" = None
+
+
+def get_app() -> "App | None":
+    return _app
+
+
+def set_status(message: str, busy: bool = False):
+    """Thread-safe global status update callable from any module."""
+    app = get_app()
+    if app is None:
+        return
+    app.root.after(0, lambda: app.set_global_status(message, busy))
+
+
+def set_progress(current: int, total: int, message: str = ""):
+    """Thread-safe determinate progress update callable from any module."""
+    app = get_app()
+    if app is None:
+        return
+    app.root.after(0, lambda: app.set_global_progress(current, total, message))
+
+
 def main():
-    app = App()
-    app.run()
+    global _app
+    _app = App()
+    _app.run()
 
 
 if __name__ == "__main__":

@@ -114,8 +114,16 @@ class PipelineManager:
         padding: int = 50,
         auto_bucket: bool = False,
         yolo_batch_size: int = 8,
+        progress_callback=None,
     ) -> List[Path]:
-        """Batch crop images using YOLO batch detection plus queued write stage."""
+        """Batch crop images using YOLO batch detection plus queued write stage.
+
+        Parameters
+        ----------
+        progress_callback:
+            Optional callable(completed: int) called after each image is written,
+            where *completed* is the 1-based count of images processed so far.
+        """
         from core.ai.cropper import detect_people_batch, calculate_crop_box, resize_to_bucket
         from core.data.file_handler import save_cropped_image_flat
 
@@ -139,12 +147,19 @@ class PipelineManager:
                     crop_box = calculate_crop_box(image, person, selected_bucket, padding)
                     queued_inputs.put((image_path, selected_bucket, image, crop_box))
 
+            completed = 0
             while not queued_inputs.empty():
                 image_path, selected_bucket, image, crop_box = queued_inputs.get()
                 cropped = image.crop(crop_box)
                 resized = resize_to_bucket(cropped, selected_bucket)
                 out = save_cropped_image_flat(resized, output_dir, selected_bucket, image_path.stem)
                 written.append(out)
+                completed += 1
+                if progress_callback:
+                    try:
+                        progress_callback(completed)
+                    except Exception:
+                        pass
 
         return written
     

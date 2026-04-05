@@ -803,10 +803,16 @@ class StepCaptions(ctk.CTkFrame):
         items_snapshot = list(self.session.items)
         self._set_loading("Batch tagging…", True)
 
+        total = len(items_snapshot)
+
         def work():
-            for item in items_snapshot:
+            from ui.app_main import set_progress, set_status
+            for i, item in enumerate(items_snapshot, 1):
                 if item.original_path.exists():
+                    self.after(0, lambda i=i: self._set_loading(f"Tagging {i}/{total}…", True))
+                    set_progress(i, total, f"Tagging {i}/{total}: {item.original_path.name}")
                     item.tags = tag_image(item.original_path, threshold=th)
+            set_status("Ready")
 
         def on_done():
             self._set_loading("", False)
@@ -840,13 +846,20 @@ class StepCaptions(ctk.CTkFrame):
         items_snapshot = list(self.session.items)
         self._set_loading("Batch captioning…", True)
 
+        total = len(items_snapshot)
+
         def work():
-            for item in items_snapshot:
+            from ui.app_main import set_progress, set_status
+            th = self.threshold_var.get()
+            for i, item in enumerate(items_snapshot, 1):
                 if not item.original_path.exists():
                     continue
+                self.after(0, lambda i=i: self._set_loading(f"Captioning {i}/{total}…", True))
+                set_progress(i, total, f"Captioning {i}/{total}: {item.original_path.name}")
                 if not item.tags:
-                    item.tags = tag_image(item.original_path, threshold=self.threshold_var.get())
+                    item.tags = tag_image(item.original_path, threshold=th)
                 item.caption = generate_caption(item.original_path, list(item.tags), prompt)
+            set_status("Ready")
 
         def on_done():
             self._set_loading("", False)
@@ -913,10 +926,10 @@ class StepFinalize(ctk.CTkFrame):
         add_tooltip(_workers_om, "Number of parallel threads used when writing output files — more workers = faster on SSDs")
         self._summary_label = ctk.CTkLabel(self, text="", anchor="w", justify="left")
         self._summary_label.pack(fill="x", padx=10, pady=10)
-        _finalize_btn = ctk.CTkButton(self, text="Finalize", command=self._finalize, width=140, height=40,
-                                      font=ctk.CTkFont(size=14, weight="bold"))
-        _finalize_btn.pack(pady=20)
-        add_tooltip(_finalize_btn, "Write all output images and .txt sidecars, then archive originals")
+        self._finalize_btn = ctk.CTkButton(self, text="Finalize", command=self._finalize, width=140, height=40,
+                                           font=ctk.CTkFont(size=14, weight="bold"))
+        self._finalize_btn.pack(pady=20)
+        add_tooltip(self._finalize_btn, "Write all output images and .txt sidecars, then archive originals")
 
     def refresh_summary(self):
         n = len(self.session.items)
@@ -942,12 +955,35 @@ class StepFinalize(ctk.CTkFrame):
         self.session.set_finalize_behavior(move_originals=self.move_originals_var.get(), workers=workers)
         if not messagebox.askyesno("Finalize", f"Finalize {len(self.session.items)} image(s)?\n\nArchive mode: {archive_mode}\nWorkers: {workers}\nOutput: {self.session.output_folder}\nProcessed: {proc}"):
             return
-        success, errors = self.session.finalize()
-        msg = f"Done. {success} image(s) finalized."
-        if errors:
-            msg += "\n\nErrors:\n" + "\n".join(errors[:10])
-            if len(errors) > 10:
-                msg += f"\n... and {len(errors) - 10} more."
-        messagebox.showinfo("Finalize", msg)
-        if self.on_finalize_done:
-            self.on_finalize_done()
+        self._finalize_btn.configure(state="disabled")
+
+        def work():
+            from ui.app_main import set_status
+            set_status(f"Finalizing {len(self.session.items)} image(s)…", busy=True)
+            return self.session.finalize()
+
+        def on_done(result):
+            from ui.app_main import set_status
+            success, errors = result
+            self._finalize_btn.configure(state="normal")
+            set_status("Ready")
+            msg = f"Done. {success} image(s) finalized."
+            if errors:
+                msg += "\n\nErrors:\n" + "\n".join(errors[:10])
+                if len(errors) > 10:
+                    msg += f"\n... and {len(errors) - 10} more."
+            messagebox.showinfo("Finalize", msg)
+            if self.on_finalize_done:
+                self.on_finalize_done()
+
+        def run():
+            try:
+                result = work()
+                self.after(0, lambda: on_done(result))
+            except Exception as e:
+                self.after(0, lambda: self._finalize_btn.configure(state="normal"))
+                self.after(0, lambda: messagebox.showerror("Finalize", str(e)))
+                from ui.app_main import set_status
+                set_status("Ready")
+
+        threading.Thread(target=run, daemon=True).start()

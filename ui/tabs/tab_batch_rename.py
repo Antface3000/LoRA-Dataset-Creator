@@ -1,6 +1,7 @@
 """Batch rename images using WD14 tagger: prepend top tags to filenames. Supports dry run."""
 
 import re
+import threading
 import customtkinter as ctk
 from pathlib import Path
 from tkinter import filedialog, messagebox
@@ -141,9 +142,9 @@ class TabBatchRename(ctk.CTkFrame):
 
         btn_frame = ctk.CTkFrame(row1, fg_color="transparent")
         btn_frame.grid(row=0, column=3, rowspan=5, padx=(15, 0))
-        _analyze_btn = ctk.CTkButton(btn_frame, text="Analyze (dry run)", width=140, command=self._analyze)
-        _analyze_btn.pack(pady=(0, 4))
-        add_tooltip(_analyze_btn, "Preview proposed renames using WD14 AI tags without changing any files")
+        self._analyze_btn = ctk.CTkButton(btn_frame, text="Analyze (dry run)", width=140, command=self._analyze)
+        self._analyze_btn.pack(pady=(0, 4))
+        add_tooltip(self._analyze_btn, "Preview proposed renames using WD14 AI tags without changing any files")
         _prepend_preview_btn = ctk.CTkButton(btn_frame, text="Preview prepend only", width=140, command=self._build_manual_list)
         _prepend_preview_btn.pack(pady=(0, 4))
         add_tooltip(_prepend_preview_btn, "Show filenames with only the manual prepend text applied (no AI tagging)")
@@ -221,15 +222,42 @@ class TabBatchRename(ctk.CTkFrame):
             w = part.strip()
             if w:
                 prepend_words.append(w)
+        sorted_files = sorted(files)
+        total = len(sorted_files)
         self._proposals = []
-        for path in sorted(files):
-            tags = tag_image(path, threshold=threshold)
-            proposed_name = _propose_name(
-                path, tags, max_tags, omit_words=omit_words, prepend_words=prepend_words
-            )
-            self._proposals.append((path, proposed_name))
-        self._refresh_list()
-        messagebox.showinfo("Dry run", f"Analyzed {len(self._proposals)} image(s). Review the list; click Apply renames to commit.")
+        self._analyze_btn.configure(state="disabled", text="Analyzing…")
+
+        def work():
+            from ui.app_main import set_progress, set_status
+            proposals = []
+            set_status(f"Analyzing {total} image(s)…", busy=True)
+            for i, path in enumerate(sorted_files, 1):
+                set_progress(i, total, f"Analyzing {i}/{total}: {path.name}")
+                tags = tag_image(path, threshold=threshold)
+                proposed_name = _propose_name(
+                    path, tags, max_tags, omit_words=omit_words, prepend_words=prepend_words
+                )
+                proposals.append((path, proposed_name))
+            set_status("Ready")
+            return proposals
+
+        def on_done(proposals):
+            self._proposals = proposals
+            self._analyze_btn.configure(state="normal", text="Analyze (dry run)")
+            self._refresh_list()
+            messagebox.showinfo("Dry run", f"Analyzed {len(proposals)} image(s). Review the list; click Apply renames to commit.")
+
+        def run():
+            try:
+                proposals = work()
+                self.after(0, lambda: on_done(proposals))
+            except Exception as e:
+                from ui.app_main import set_status
+                set_status("Ready")
+                self.after(0, lambda: self._analyze_btn.configure(state="normal", text="Analyze (dry run)"))
+                self.after(0, lambda: messagebox.showerror("Analyze", str(e)))
+
+        threading.Thread(target=run, daemon=True).start()
 
     def _build_manual_list(self):
         """Build proposed renames using only the manual prepend (no AI analysis)."""
