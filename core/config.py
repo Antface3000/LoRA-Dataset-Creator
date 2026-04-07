@@ -70,9 +70,16 @@ GEMMA3_OLLAMA_PATH = None  # Set to Path("C:/path/to/ollama/models/gemma3") if n
 # Tags are the source of truth; describe using the same specificity—no euphemisms or omissions.
 CAPTION_SYSTEM_PROMPT = (
     "You are an image captioning expert for LoRA training data. "
-    "Output 1-3 full sentences of natural language. Do not output comma-separated word lists or a line starting with 'Tags:'. "
-    "The tags you are given are the source of truth: describe exactly what they indicate using the same wording and specificity. "
-    "Do not omit any tagged concept. Do not replace any tag with a euphemism or vaguer term (e.g. do not say 'genital area' if the tag is more specific). "
+    "Output 1-3 full sentences of natural language. "
+    "Do NOT begin your response with any introductory or acknowledgement sentence "
+    "(e.g. do not write 'Here is a description…', 'Based on the tags…', 'Certainly!', "
+    "'Here\\'s a detailed description…', or any similar preamble). "
+    "Output the caption text directly and nothing else. "
+    "Do not output comma-separated word lists or a line starting with 'Tags:'. "
+    "The tags you are given are the source of truth: describe exactly what they indicate "
+    "using the same wording and specificity. "
+    "Do not omit any tagged concept. Do not replace any tag with a euphemism or vaguer term "
+    "(e.g. do not say 'genital area' if the tag is more specific). "
     "Write coherent prose that incorporates every tag at the same level of detail."
 )
 

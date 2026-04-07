@@ -41,10 +41,15 @@ def load_and_process_image(
     person = detect_person(image_path, yolo_model, person_confidence)
     selected_bucket = detect_bucket_from_dimensions(image.width, image.height)
 
-    # YOLO override: if auto_bucket is on and a person was found, use the
-    # person's aspect ratio (more accurate for subject-centred crops).
-    if auto_bucket_enabled and person is not None:
-        selected_bucket = auto_select_bucket(person.aspect_ratio)
+    # YOLO override when auto_bucket is on:
+    # - Person found  → use person aspect ratio for a subject-centred crop.
+    # - No person     → image is likely already closely cropped; treat as no-crop
+    #                   passthrough so it isn't blindly center-cropped.
+    if auto_bucket_enabled:
+        if person is not None:
+            selected_bucket = auto_select_bucket(person.aspect_ratio)
+        else:
+            selected_bucket = "no_crop"
 
     # Manual override: only honour current_bucket if it is the explicit
     # no_crop selection — everything else uses dimension/YOLO detection.

@@ -69,7 +69,7 @@ class ProfilesManager:
                     "anthropic_api_key": "",
                     "anthropic_model": "claude-3-5-haiku-20241022",
                     "gemini_api_key": "",
-                    "gemini_model": "gemini-1.5-flash-latest",
+                    "gemini_model": "gemini-2.5-flash",
                     "padding_margin": DEFAULT_PADDING_MARGIN,
                     "person_confidence": DEFAULT_PERSON_CONFIDENCE,
                     "ui_scaling": 1.0,
@@ -78,7 +78,9 @@ class ProfilesManager:
                     "default_trigger_words": "",
                     "default_find_replace": [],
                     "default_output_format": "Natural language",
-                    "enable_nudenet": False
+                    "enable_nudenet": False,
+                    "color_theme": "blue",
+                    "min_crop_px": 512
                 }
             },
             "current_profile": "User settings",

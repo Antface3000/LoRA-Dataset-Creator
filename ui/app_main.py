@@ -33,6 +33,7 @@ class App:
         ctk.set_widget_scaling(scale)
         ctk.set_window_scaling(scale)
         ctk.set_appearance_mode(profile.get("appearance_mode", "dark"))
+        ctk.set_default_color_theme(profile.get("color_theme", "blue"))
         self.root = ctk.CTk()
         self.root.title("LoRA Dataset Manager")
         self.root.minsize(1050, 650)
@@ -102,7 +103,8 @@ class App:
         self.wizard_content.grid_rowconfigure(0, weight=1)
         step1 = StepDirectories(self.wizard_content, on_paths_changed=lambda: None)
         step2 = StepImages(self.wizard_content, on_list_changed=lambda: self._refresh_finalize_summary())
-        step3 = StepCaptions(self.wizard_content, on_changed=lambda: None)
+        step3 = StepCaptions(self.wizard_content, on_changed=lambda: None,
+                             open_settings_cb=self._open_settings)
         step4 = StepFinalize(self.wizard_content, on_finalize_done=lambda: self._refresh_finalize_summary())
         for f in (step1, step2, step3, step4):
             f.grid(row=0, column=0, sticky="nsew")
@@ -135,8 +137,11 @@ class App:
             return
         self.pipeline_manager.caption_queue.clear()
         added = self.session.add_items(queue)
-        if added and hasattr(self.step_frames[1], "_refresh_list"):
-            self.step_frames[1]._refresh_list()
+        if added:
+            if hasattr(self.step_frames[1], "_refresh_list"):
+                self.step_frames[1]._refresh_list()
+            if len(self.step_frames) >= 3 and hasattr(self.step_frames[2], "_refresh_list"):
+                self.step_frames[2]._refresh_list()
 
     def _show_step(self, step: int):
         self.current_step = step
@@ -158,6 +163,10 @@ class App:
             vram.ensure_state(State.IDLE)
         if step == 1:
             self._import_crop_queue_into_session()
+        if step == 2:
+            if hasattr(self, "step_frames") and len(self.step_frames) >= 3:
+                if hasattr(self.step_frames[2], "_refresh_list"):
+                    self.step_frames[2]._refresh_list()
 
     def _on_tab_changed(self):
         """Called whenever the user clicks a main tab."""
@@ -232,13 +241,14 @@ class App:
         open_profile_manager(self.root, on_profiles_changed=_on_changed)
 
     def _apply_ui_from_profile(self):
-        """Apply appearance and scaling from current profile."""
+        """Apply appearance, scaling, and color theme from current profile."""
         profile = self.profiles_manager.get_current_profile()
         mode = profile.get("appearance_mode", "dark")
         scale = float(profile.get("ui_scaling", 1.0))
         ctk.set_appearance_mode(mode)
         ctk.set_widget_scaling(scale)
         ctk.set_window_scaling(scale)
+        ctk.set_default_color_theme(profile.get("color_theme", "blue"))
         step_font_size = max(10, int(12 * self.get_text_scale()))
         self.step_label.configure(font=ctk.CTkFont(size=step_font_size))
 
@@ -276,6 +286,8 @@ class App:
         if hasattr(self, "step_frames") and len(self.step_frames) >= 3:
             if hasattr(self.step_frames[2], "apply_profile"):
                 self.step_frames[2].apply_profile(profile)
+            if hasattr(self.step_frames[2], "_refresh_list"):
+                self.step_frames[2]._refresh_list()
         if hasattr(self, "_sort_tab"):
             self._sort_tab.apply_profile(profile)
             self._sort_tab.apply_nudenet_visibility()

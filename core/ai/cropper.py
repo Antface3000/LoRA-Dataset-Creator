@@ -252,3 +252,28 @@ def resize_to_bucket(image: Image.Image, bucket: str) -> Image.Image:
     """
     target_w, target_h = BUCKETS[bucket]
     return image.resize((target_w, target_h), Image.Resampling.LANCZOS)
+
+
+def resize_letterbox(image: Image.Image, bucket: str) -> Image.Image:
+    """Fit image into bucket dimensions while preserving aspect ratio (letterbox).
+
+    The image is scaled to fit within the target width/height without cropping
+    or stretching.  Any remaining area is padded with black.  This is used for
+    NudeNet crops where the detected region can have any aspect ratio and
+    forcing it into a fixed bucket shape would distort the content.
+
+    Args:
+        image: PIL Image to resize
+        bucket: Bucket type ('portrait', 'square', 'landscape')
+
+    Returns:
+        Letterboxed PIL Image at the exact bucket dimensions
+    """
+    from PIL import ImageOps
+    target_w, target_h = BUCKETS[bucket]
+    return ImageOps.pad(
+        image,
+        (target_w, target_h),
+        color=(0, 0, 0),
+        method=Image.Resampling.LANCZOS,
+    )

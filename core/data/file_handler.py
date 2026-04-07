@@ -1,5 +1,6 @@
 """File I/O operations using pathlib.Path exclusively (NO os.path allowed)."""
 
+import re as _re
 from functools import lru_cache
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -8,6 +9,64 @@ from PIL import Image
 from core.config import (
     VALID_EXTENSIONS, FOLDERS, FOLDER_REJECTS, FOLDER_BLURRY
 )
+
+
+_BUCKET_PREFIXES = ("portrait_", "square_", "landscape_")
+# All known prefixes the tool adds to output filenames
+_ALL_OUTPUT_PREFIXES = ("portrait_", "square_", "landscape_", "nocrop_")
+_DUP_SUFFIX_RE = _re.compile(r'_dup\d+$')
+
+
+def get_already_cropped_stems(output_dir: Path) -> set:
+    """Return the set of original file stems already present in output_dir.
+
+    Handles all output filename patterns produced by the tool:
+
+    * ``square_myphoto.png``            — standard crop
+    * ``nocrop_myphoto.jpg``            — no-crop passthrough (.jpg source)
+    * ``nocrop_myphoto.png``            — no-crop passthrough (.png source)
+    * ``square_myphoto_breast_exp.png`` — NudeNet batch crop
+    * ``square_myphoto_dup1.png``       — duplicate counter
+
+    All output files produced by the tool carry a known prefix
+    (``portrait_`` / ``square_`` / ``landscape_`` / ``nocrop_``) so the
+    original stem can always be recovered reliably regardless of extension.
+    """
+    if not output_dir or not output_dir.exists():
+        return set()
+
+    # Load NudeNet class suffixes lazily (app works fine without nudenet installed)
+    try:
+        from core.ai.nudenet_detector import CLASS_SUFFIXES as _cls_sfx
+        _nudenet_suffixes: tuple = tuple(f"_{v}" for v in _cls_sfx.values())
+    except Exception:
+        _nudenet_suffixes = ()
+
+    stems: set = set()
+    for f in output_dir.iterdir():
+        if not f.is_file() or f.suffix.lower() not in VALID_EXTENSIONS:
+            continue
+
+        name = f.stem
+
+        # Strip the leading output prefix (bucket or nocrop)
+        for prefix in _ALL_OUTPUT_PREFIXES:
+            if name.startswith(prefix):
+                name = name[len(prefix):]
+                break
+
+        # Strip NudeNet class suffix if present (e.g. "_breast_exp")
+        for sfx in _nudenet_suffixes:
+            if name.endswith(sfx):
+                name = name[: -len(sfx)]
+                break
+
+        # Strip duplicate counter suffix (_dup1, _dup2, …)
+        name = _DUP_SUFFIX_RE.sub('', name)
+
+        stems.add(name)
+
+    return stems
 
 
 def load_image_files(source_dir: Path) -> List[Path]:
@@ -181,14 +240,13 @@ def save_cropped_image_flat(
 
 
 def create_output_structure(output_dir: Path) -> None:
-    """Create output folder (single directory). Reject/blurry folders for quality filter only.
-    
+    """Create the output folder. Reject/blurry subfolders are created on demand
+    by the quality filter when it actually finds files to move there.
+
     Args:
         output_dir: Output directory path
     """
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / FOLDER_REJECTS).mkdir(exist_ok=True)
-    (output_dir / FOLDER_BLURRY).mkdir(exist_ok=True)
 
 
 def write_caption_file(path: Path, content: str) -> None:

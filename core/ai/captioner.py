@@ -103,7 +103,11 @@ def _get_active_system_prompt() -> str:
         "RULES: (1) Incorporate every tag in the caption—do not omit or skip any. "
         "(2) Use the same specific terms as the tags; do not replace them with euphemisms or vaguer words. "
         "(3) The caption is for training a model that does not know explicit details; the tags supply that—your job is to "
-        "weave every tag into natural prose at the same specificity. Output only the caption text, nothing else."
+        "weave every tag into natural prose at the same specificity. "
+        "Output only the caption text, nothing else. "
+        "Do NOT start with any preamble, acknowledgement, or introductory sentence "
+        "(e.g. 'Here is a description…', 'Based on the tags…', 'Here\\'s a detailed description…', 'Certainly!'). "
+        "Begin directly with the caption."
     )
 
 
@@ -750,11 +754,14 @@ def generate_caption(
     if source != "local":
         from core.ai.caption_backends import get_caption_backend
         backend = get_caption_backend(profile)
+        # Use explicit override first; fall back to the profile's stored system prompt
+        # so that the Settings / Step-3 system-prompt field is always honoured.
+        active_sys_prompt = system_prompt_override or _get_active_system_prompt() or None
         return backend.generate(
             image_path,
             tags=tags,
             prompt=prompt_override or user_prompt or None,
-            system_prompt=system_prompt_override,
+            system_prompt=active_sys_prompt,
         )
 
     # Local path — delegate to Captioner class

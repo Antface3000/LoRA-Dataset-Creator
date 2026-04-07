@@ -294,7 +294,7 @@ class GeminiBackend(CaptionBackend):
     The older ``google-generativeai`` package is no longer compatible.
     """
 
-    def __init__(self, api_key: str, model: str = "gemini-1.5-flash-latest"):
+    def __init__(self, api_key: str, model: str = "gemini-2.5-flash"):
         self.api_key = api_key
         self.model = model
 
@@ -388,7 +388,7 @@ def get_caption_backend(profile: Optional[dict] = None) -> CaptionBackend:
     if source == "gemini":
         return GeminiBackend(
             api_key=p.get("gemini_api_key") or "",
-            model=p.get("gemini_model") or "gemini-1.5-flash-latest",
+            model=p.get("gemini_model") or "gemini-2.5-flash",
         )
 
     # Default: local transformers model

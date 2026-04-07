@@ -95,6 +95,26 @@ def create_control_panel(parent) -> tuple[ctk.CTkScrollableFrame, dict]:
     nudenet_section = ctk.CTkFrame(batch_frame, fg_color="transparent")
     nudenet_section.pack(fill="x", padx=10, pady=(0, 4))
     bp_row = nudenet_section
+
+    # Context padding slider — controls how much surrounding area is included
+    ctx_header = ctk.CTkFrame(bp_row, fg_color="transparent")
+    ctx_header.pack(fill="x", pady=(0, 2))
+    ctk.CTkLabel(ctx_header, text="Context padding:").pack(side="left")
+    nudenet_context_scale_var = ctk.DoubleVar(value=2.0)
+    ctx_value_label = ctk.CTkLabel(ctx_header, text="2.00×", width=42, anchor="e")
+    ctx_value_label.pack(side="right")
+    ctx_slider = ctk.CTkSlider(
+        bp_row, from_=1.0, to=4.0, variable=nudenet_context_scale_var, width=150,
+        command=lambda v: ctx_value_label.configure(text=f"{float(v):.2f}×"),
+    )
+    ctx_slider.pack(anchor="w", pady=(0, 6))
+    add_tooltip(ctx_slider,
+                "How much surrounding area to include around the detected body part.\n"
+                "1.0× = tight crop to the bounding box only.\n"
+                "2.0× = double the box size (recommended).\n"
+                "4.0× = very loose — includes most of the figure.")
+    widgets['nudenet_context_scale_var'] = nudenet_context_scale_var
+
     ctk.CTkLabel(bp_row, text="Body parts to detect:").pack(anchor="w")
     bp_list_frame = ctk.CTkScrollableFrame(bp_row, height=140)
     bp_list_frame.pack(fill="x", pady=(2, 4))
@@ -105,23 +125,68 @@ def create_control_panel(parent) -> tuple[ctk.CTkScrollableFrame, dict]:
         cb.pack(anchor="w", padx=4, pady=1)
         add_tooltip(cb, f"Include '{display_label}' in the detection scan")
         body_part_vars[class_key] = var
-    bp_batch_btn = ctk.CTkButton(bp_row, text="Batch detect & crop all", height=28,
-                                 fg_color="#1f538d")
-    bp_batch_btn.pack(fill="x", pady=(0, 4))
-    add_tooltip(bp_batch_btn,
-                "Run NudeNet on every image in the list using all checked body parts, "
-                "auto-crop and save matches to the output folder.")
     widgets['body_part_vars'] = body_part_vars
-    widgets['bp_batch_btn'] = bp_batch_btn
     widgets['nudenet_section'] = nudenet_section
 
-    # -- YOLO auto crop all --
-    auto_crop_btn = ctk.CTkButton(batch_frame, text="Auto crop all (YOLO)",
-                                  height=28, fg_color="#1f538d")
-    auto_crop_btn.pack(fill="x", padx=10, pady=(0, 10))
-    add_tooltip(auto_crop_btn,
-                "Batch-crop all images in the source folder using YOLO person detection")
-    widgets['auto_crop_button'] = auto_crop_btn
+    # -- YOLO crop margin --
+    yolo_row = ctk.CTkFrame(batch_frame, fg_color="transparent")
+    yolo_row.pack(fill="x", padx=10, pady=(0, 4))
+    yolo_hdr = ctk.CTkFrame(yolo_row, fg_color="transparent")
+    yolo_hdr.pack(fill="x")
+    ctk.CTkLabel(yolo_hdr, text="YOLO crop margin:").pack(side="left")
+    yolo_margin_var = ctk.DoubleVar(value=50)
+    yolo_value_label = ctk.CTkLabel(yolo_hdr, text="50 px", width=48, anchor="e")
+    yolo_value_label.pack(side="right")
+    yolo_slider = ctk.CTkSlider(
+        yolo_row, from_=0, to=400, variable=yolo_margin_var, width=150,
+        command=lambda v: yolo_value_label.configure(text=f"{int(v)} px"),
+    )
+    yolo_slider.pack(anchor="w", pady=(2, 4))
+    add_tooltip(yolo_slider,
+                "Controls how much context surrounds the detected person.\n"
+                "0 px  = widest crop (maximum context / full frame).\n"
+                "400 px = tightest crop (zoomed in on the person).\n"
+                "Adjust here and the preview updates instantly before running the batch.")
+    widgets['yolo_margin_var'] = yolo_margin_var
+
+    # -- Minimum crop size --
+    min_px_row = ctk.CTkFrame(batch_frame, fg_color="transparent")
+    min_px_row.pack(fill="x", padx=10, pady=(0, 4))
+    min_px_hdr = ctk.CTkFrame(min_px_row, fg_color="transparent")
+    min_px_hdr.pack(fill="x")
+    ctk.CTkLabel(min_px_hdr, text="Min. crop size:").pack(side="left")
+    min_crop_px_var = ctk.IntVar(value=512)
+    min_px_value_label = ctk.CTkLabel(min_px_hdr, text="512 px", width=52, anchor="e")
+    min_px_value_label.pack(side="right")
+    min_px_slider = ctk.CTkSlider(
+        min_px_row, from_=0, to=1024, variable=min_crop_px_var, width=150,
+        command=lambda v: min_px_value_label.configure(text=f"{int(v)} px"),
+    )
+    min_px_slider.pack(anchor="w", pady=(2, 4))
+    add_tooltip(min_px_slider,
+                "Images smaller than this size (either dimension) are passed through\n"
+                "without cropping — they are likely already closely cropped.\n"
+                "0 = disabled (all images are processed).")
+    widgets['min_crop_px_var'] = min_crop_px_var
+
+    # -- Smart Crop All (YOLO + optional NudeNet focus) --
+    smart_btn_row = ctk.CTkFrame(batch_frame, fg_color="transparent")
+    smart_btn_row.pack(fill="x", padx=10, pady=(0, 10))
+    smart_crop_btn = ctk.CTkButton(smart_btn_row, text="Smart Crop All", height=28,
+                                   fg_color="#1f538d")
+    smart_crop_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
+    add_tooltip(smart_crop_btn,
+                "Batch-process every image in the source folder:\n"
+                "  1. YOLO detects person → sets outer crop boundary.\n"
+                "  2. If body parts are checked, NudeNet focuses the crop on those regions.\n"
+                "  3. No person found → image is passed through as nocrop_.\n"
+                "  4. Result too small → image is passed through as nocrop_.")
+    smart_stop_btn = ctk.CTkButton(smart_btn_row, text="Stop", height=28, width=60,
+                                   fg_color="gray40", state="disabled")
+    smart_stop_btn.pack(side="left")
+    add_tooltip(smart_stop_btn, "Stop the Smart Crop batch after the current image finishes.")
+    widgets['smart_crop_btn'] = smart_crop_btn
+    widgets['smart_stop_btn'] = smart_stop_btn
 
     # ── 3. Per-image review ───────────────────────────────────────────────────
     review_frame = ctk.CTkFrame(right_panel)

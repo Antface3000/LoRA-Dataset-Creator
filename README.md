@@ -171,7 +171,7 @@ Cost: ~$0.002–$0.005 per image with `gpt-4o`.
 Free tier: 15 requests/min, 1 500 requests/day (as of 2026).
 
 1. Create an API key at <https://aistudio.google.com/app/apikey>
-2. In the app: **Settings → Caption source = `gemini`**, paste your key, choose a model (default: `gemini-1.5-flash-latest`).
+2. In the app: **Settings → Caption source = `gemini`**, paste your key, choose a model (default: `gemini-2.5-flash`).
 
 ---
 

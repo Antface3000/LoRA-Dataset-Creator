@@ -1,8 +1,11 @@
-"""Settings dialog: text size (UI scale), appearance, LLM/caption defaults. Saved to current profile."""
+"""Settings dialog — 3-tab layout: Interface / Caption / API & Models."""
 
+import os
+import sys
+import subprocess
+import threading
 import customtkinter as ctk
 from tkinter import messagebox
-import threading
 
 from core.data.profiles import get_profiles_manager
 from core.config import CAPTION_SYSTEM_PROMPT
@@ -15,207 +18,290 @@ _ANTHROPIC_MODELS = [
     "claude-3-5-haiku-20241022", "claude-3-5-sonnet-20241022",
     "claude-3-opus-20240229",
 ]
-_GEMINI_MODELS = ["gemini-1.5-flash-latest", "gemini-1.5-pro-latest", "gemini-1.0-pro-latest"]
+_GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"]
+_COLOR_THEMES = ["blue", "green", "dark-blue"]
 
 
 def open_settings_dialog(parent, on_applied_callback=None):
-    """Open a modal settings window. on_applied_callback() is called after Save (so app can apply theme/scale)."""
+    """Open a modal settings window. on_applied_callback() is called after Save."""
     profiles = get_profiles_manager()
     profile = profiles.get_current_profile()
     backend_cfg = profiles.get_caption_backend_settings()
 
     d = ctk.CTkToplevel(parent)
     d.title("Settings")
-    d.geometry("600x780")
+    d.geometry("580x620")
+    d.minsize(520, 520)
     d.transient(parent)
     d.grab_set()
-    main = ctk.CTkScrollableFrame(d)
-    main.pack(fill="both", expand=True, padx=15, pady=15)
-    main.grid_columnconfigure(1, weight=1)
+
+    tabview = ctk.CTkTabview(d, anchor="nw")
+    tabview.pack(fill="both", expand=True, padx=12, pady=(12, 0))
+
+    tab_iface = tabview.add("Interface")
+    tab_caption = tabview.add("Caption")
+    tab_api = tabview.add("API & Models")
+
+    # ─────────────────────────────────────────────────────────────
+    # TAB 1 — Interface
+    # ─────────────────────────────────────────────────────────────
+    iface = ctk.CTkScrollableFrame(tab_iface, fg_color="transparent")
+    iface.pack(fill="both", expand=True)
+    iface.grid_columnconfigure(1, weight=1)
 
     row = 0
-    ctk.CTkLabel(main, text="Interface", font=ctk.CTkFont(weight="bold")).grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 5))
-    row += 1
-    ctk.CTkLabel(main, text="UI scale:").grid(row=row, column=0, sticky="w", padx=(0, 10), pady=3)
+
+    # UI scale
+    ctk.CTkLabel(iface, text="UI scale:").grid(row=row, column=0, sticky="w", padx=(0, 10), pady=3)
     scale_var = ctk.DoubleVar(value=float(profile.get("ui_scaling", 1.0)))
-    scale_slider = ctk.CTkSlider(main, from_=0.9, to=1.4, variable=scale_var, width=160, command=lambda v: scale_label.configure(text=f"{float(v):.2f}"))
+    scale_label = ctk.CTkLabel(iface, text=f"{scale_var.get():.2f}", width=42, anchor="e")
+    scale_slider = ctk.CTkSlider(
+        iface, from_=0.9, to=1.4, variable=scale_var, width=200,
+        command=lambda v: scale_label.configure(text=f"{float(v):.2f}"),
+    )
     scale_slider.grid(row=row, column=1, sticky="w", pady=3)
-    add_tooltip(scale_slider, "Zoom all UI elements; requires restart to fully apply")
-    scale_label = ctk.CTkLabel(main, text=f"{scale_var.get():.2f}")
     scale_label.grid(row=row, column=2, sticky="w", padx=(8, 0), pady=3)
+    add_tooltip(scale_slider, "Zoom all UI elements; requires restart to fully apply.\n0.9 = smaller, 1.4 = larger.")
     row += 1
-    ctk.CTkLabel(main, text="(0.9 = smaller, 1.4 = larger). Applied at startup.", wraplength=420).grid(row=row, column=1, columnspan=2, sticky="w", pady=(0, 5))
-    row += 1
-    ctk.CTkLabel(main, text="Text size:").grid(row=row, column=0, sticky="w", padx=(0, 10), pady=3)
+
+    # Text size
+    ctk.CTkLabel(iface, text="Text size:").grid(row=row, column=0, sticky="w", padx=(0, 10), pady=3)
     text_scale_var = ctk.DoubleVar(value=float(profile.get("text_scale", 1.0)))
-    def _text_scale_fmt(v):
-        pct = int(float(v) * 100)
-        return f"{pct}%"
-    text_scale_slider = ctk.CTkSlider(main, from_=0.9, to=1.5, variable=text_scale_var, width=160,
-                                      command=lambda v: text_scale_label.configure(text=_text_scale_fmt(v)))
+
+    def _pct(v):
+        return f"{int(float(v) * 100)}%"
+
+    text_scale_label = ctk.CTkLabel(iface, text=_pct(text_scale_var.get()), width=42, anchor="e")
+    text_scale_slider = ctk.CTkSlider(
+        iface, from_=0.9, to=1.5, variable=text_scale_var, width=200,
+        command=lambda v: text_scale_label.configure(text=_pct(v)),
+    )
     text_scale_slider.grid(row=row, column=1, sticky="w", pady=3)
-    add_tooltip(text_scale_slider, "Scale text labels independently of UI zoom (90%–150%)")
-    text_scale_label = ctk.CTkLabel(main, text=_text_scale_fmt(text_scale_var.get()))
     text_scale_label.grid(row=row, column=2, sticky="w", padx=(8, 0), pady=3)
+    add_tooltip(text_scale_slider, "Scale text labels independently of UI zoom (90%–150%).")
     row += 1
-    ctk.CTkLabel(main, text="(90%–150%. Affects labels and text for accessibility.)", wraplength=420).grid(row=row, column=1, columnspan=2, sticky="w", pady=(0, 8))
-    row += 1
-    ctk.CTkLabel(main, text="Appearance:").grid(row=row, column=0, sticky="w", padx=(0, 10), pady=3)
+
+    # Appearance mode
+    ctk.CTkLabel(iface, text="Appearance:").grid(row=row, column=0, sticky="w", padx=(0, 10), pady=3)
     appearance_var = ctk.StringVar(value=profile.get("appearance_mode", "dark"))
-    appearance_menu = ctk.CTkOptionMenu(main, variable=appearance_var, values=["dark", "light", "system"], width=120)
+    appearance_menu = ctk.CTkOptionMenu(iface, variable=appearance_var, values=["dark", "light", "system"], width=130)
     appearance_menu.grid(row=row, column=1, sticky="w", pady=3)
-    add_tooltip(appearance_menu, "Switch between dark, light, or system color theme")
+    add_tooltip(appearance_menu, "Switch between dark, light, or system color theme.")
     row += 1
 
-    # ── Smart Detection ────────────────────────────────────────────────────
-    row += 1
-    ctk.CTkLabel(main, text="Smart Detection", font=ctk.CTkFont(weight="bold")).grid(row=row, column=0, columnspan=3, sticky="w", pady=(15, 5))
-    row += 1
-    nudenet_var = ctk.BooleanVar(value=bool(profile.get("enable_nudenet", False)))
-    nudenet_cb = ctk.CTkCheckBox(main, text="Enable NudeNet body-part detection", variable=nudenet_var)
-    nudenet_cb.grid(row=row, column=0, columnspan=3, sticky="w", pady=3)
-    add_tooltip(nudenet_cb,
-                "Show body-part detection controls on the Crop & Sort tab.\n"
-                "Requires the 'nudenet' package to be installed.\n"
-                "Off by default — toggle on and save to enable per-profile.")
-    row += 1
-    ctk.CTkLabel(main,
-                 text="Install: pip install nudenet    (off by default)",
-                 wraplength=420, text_color="gray60").grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 8))
+    # Color theme
+    ctk.CTkLabel(iface, text="Color theme:").grid(row=row, column=0, sticky="w", padx=(0, 10), pady=3)
+    color_theme_var = ctk.StringVar(value=profile.get("color_theme", "blue"))
+    color_theme_menu = ctk.CTkOptionMenu(iface, variable=color_theme_var, values=_COLOR_THEMES, width=130)
+    color_theme_menu.grid(row=row, column=1, sticky="w", pady=3)
+    add_tooltip(
+        color_theme_menu,
+        "CTk accent color theme.\n"
+        "blue = default blue highlights.\n"
+        "green = green highlights.\n"
+        "dark-blue = deeper navy highlights.\n"
+        "Takes effect after Save + restart.",
+    )
     row += 1
 
-    # ── Caption / LLM defaults ──────────────────────────────────────────────
+    # Hint row
+    ctk.CTkLabel(
+        iface,
+        text="UI scale and color theme are applied at next startup.",
+        text_color="gray60",
+        wraplength=380,
+    ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(2, 10))
     row += 1
-    ctk.CTkLabel(main, text="Caption / LLM defaults", font=ctk.CTkFont(weight="bold")).grid(row=row, column=0, columnspan=3, sticky="w", pady=(15, 5))
-    row += 1
-    ctk.CTkLabel(main, text="Default trigger words:").grid(row=row, column=0, sticky="nw", padx=(0, 10), pady=3)
-    trigger_entry = ctk.CTkEntry(main, width=220, placeholder_text="e.g. mylora")
+
+    # ─────────────────────────────────────────────────────────────
+    # TAB 2 — Caption
+    # ─────────────────────────────────────────────────────────────
+    cap = ctk.CTkScrollableFrame(tab_caption, fg_color="transparent")
+    cap.pack(fill="both", expand=True)
+    cap.grid_columnconfigure(1, weight=1)
+
+    row = 0
+
+    # Trigger words
+    ctk.CTkLabel(cap, text="Default trigger words:").grid(row=row, column=0, sticky="w", padx=(0, 10), pady=3)
+    trigger_entry = ctk.CTkEntry(cap, width=240, placeholder_text="e.g. mylora")
     trigger_entry.insert(0, profile.get("default_trigger_words", "") or "")
     trigger_entry.grid(row=row, column=1, sticky="w", pady=3)
-    add_tooltip(trigger_entry, "Trigger words added to captions when creating a new session")
+    add_tooltip(trigger_entry, "Trigger words added to captions when creating a new session.")
     row += 1
-    ctk.CTkLabel(main, text="Default caption output:").grid(row=row, column=0, sticky="w", padx=(0, 10), pady=3)
+
+    # Output format
+    ctk.CTkLabel(cap, text="Default caption output:").grid(row=row, column=0, sticky="w", padx=(0, 10), pady=3)
     output_format_var = ctk.StringVar(value=profile.get("default_output_format", "Natural language"))
-    _out_fmt_menu = ctk.CTkOptionMenu(main, variable=output_format_var, values=["Tags only", "Natural language", "Both"], width=160)
-    _out_fmt_menu.grid(row=row, column=1, sticky="w", pady=3)
-    add_tooltip(_out_fmt_menu, "Which output format to default to on Step 3 (Tags only, Natural language, or Both)")
+    out_fmt_menu = ctk.CTkOptionMenu(cap, variable=output_format_var, values=["Tags only", "Natural language", "Both"], width=160)
+    out_fmt_menu.grid(row=row, column=1, sticky="w", pady=3)
+    add_tooltip(out_fmt_menu, "Which output format to default to on Step 3 (Tags only, Natural language, or Both).")
     row += 1
-    ctk.CTkLabel(main, text="Find/replace (one per line: find|replace):", wraplength=420).grid(row=row, column=0, columnspan=2, sticky="nw", padx=(0, 10), pady=(8, 3))
-    fr_text = ctk.CTkTextbox(main, height=80, width=280)
-    fr_text.grid(row=row, column=1, sticky="w", pady=3)
+
+    # Find / replace
+    ctk.CTkLabel(cap, text="Find/replace\n(find|replace, one per line):", wraplength=160, justify="left").grid(
+        row=row, column=0, sticky="nw", padx=(0, 10), pady=(8, 3))
+    fr_text = ctk.CTkTextbox(cap, height=80, width=280)
+    fr_text.grid(row=row, column=1, sticky="ew", pady=(8, 3))
     add_tooltip(fr_text, "One substitution per line in the format: find|replace")
     default_fr = profile.get("default_find_replace") or []
     if isinstance(default_fr, list):
         fr_text.insert("1.0", "\n".join(f"{a}|{b}" for a, b in default_fr))
     row += 1
 
-    ctk.CTkLabel(main, text="Caption system prompt:", wraplength=420).grid(row=row, column=0, columnspan=2, sticky="nw", padx=(0, 10), pady=(8, 3))
-    system_prompt_text = ctk.CTkTextbox(main, height=100, width=280, wrap="word")
-    system_prompt_text.grid(row=row, column=1, sticky="w", pady=3)
-    add_tooltip(system_prompt_text, "System prompt sent to the LLM during caption finalization for this profile")
+    # System prompt
+    ctk.CTkLabel(cap, text="Caption system prompt:", wraplength=160, justify="left").grid(
+        row=row, column=0, sticky="nw", padx=(0, 10), pady=(8, 3))
+    system_prompt_text = ctk.CTkTextbox(cap, height=110, width=280, wrap="word")
+    system_prompt_text.grid(row=row, column=1, sticky="ew", pady=(8, 3))
+    add_tooltip(system_prompt_text, "System prompt sent to the LLM during caption generation for this profile.")
     current_prompt = profile.get("caption_system_prompt") or CAPTION_SYSTEM_PROMPT
     system_prompt_text.insert("1.0", current_prompt)
     row += 1
 
-    # ── Caption Model / Backend ─────────────────────────────────────────────
+    # ── Smart Detection ───────────────────────────────────────────
+    sep = ctk.CTkFrame(cap, height=1, fg_color="gray40")
+    sep.grid(row=row, column=0, columnspan=3, sticky="ew", pady=(12, 6))
     row += 1
-    ctk.CTkLabel(main, text="Caption Model / Backend", font=ctk.CTkFont(weight="bold")).grid(row=row, column=0, columnspan=3, sticky="w", pady=(15, 5))
+
+    ctk.CTkLabel(cap, text="Smart Detection", font=ctk.CTkFont(weight="bold")).grid(
+        row=row, column=0, columnspan=3, sticky="w", pady=(0, 4))
     row += 1
-    ctk.CTkLabel(main, text="Caption source:").grid(row=row, column=0, sticky="w", padx=(0, 10), pady=3)
+
+    nudenet_var = ctk.BooleanVar(value=bool(profile.get("enable_nudenet", False)))
+    nudenet_cb = ctk.CTkCheckBox(cap, text="Enable NudeNet body-part detection", variable=nudenet_var)
+    nudenet_cb.grid(row=row, column=0, columnspan=3, sticky="w", pady=3)
+    add_tooltip(
+        nudenet_cb,
+        "Show body-part detection controls on the Crop & Sort tab.\n"
+        "Requires the 'nudenet' package: pip install nudenet\n"
+        "Off by default — toggle on and save to enable per-profile.",
+    )
+    row += 1
+
+    ctk.CTkLabel(cap, text="Install: pip install nudenet    (off by default)",
+                 text_color="gray60", wraplength=380).grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 8))
+    row += 1
+
+    # ─────────────────────────────────────────────────────────────
+    # TAB 3 — API & Models
+    # ─────────────────────────────────────────────────────────────
+    api = ctk.CTkScrollableFrame(tab_api, fg_color="transparent")
+    api.pack(fill="both", expand=True)
+    api.grid_columnconfigure(1, weight=1)
+
+    row = 0
+
+    ctk.CTkLabel(api, text="Caption source:").grid(row=row, column=0, sticky="w", padx=(0, 10), pady=3)
     source_var = ctk.StringVar(value=backend_cfg.get("caption_source", "local"))
-    source_menu = ctk.CTkOptionMenu(main, variable=source_var, values=_SOURCE_LABELS, width=140)
+    source_menu = ctk.CTkOptionMenu(api, variable=source_var, values=_SOURCE_LABELS, width=140)
     source_menu.grid(row=row, column=1, sticky="w", pady=3)
-    add_tooltip(source_menu, "Where to send captioning requests: local models, Ollama server, or remote API")
+    add_tooltip(source_menu, "Where to send captioning requests: local models, Ollama server, or remote API.")
     row += 1
 
-    # Rows that show/hide depending on source selection
-    # -- local model row --
-    local_label = ctk.CTkLabel(main, text="Local model:")
+    # ── dynamic backend rows ──────────────────────────────────────
+    # local
+    local_label = ctk.CTkLabel(api, text="Local model:")
     local_var = ctk.StringVar(value=backend_cfg.get("caption_local_model", "joycaption"))
-    local_menu = ctk.CTkOptionMenu(main, variable=local_var, values=_LOCAL_MODELS, width=140)
-    add_tooltip(local_menu, "Which local HuggingFace model to use for captioning (joycaption, florence2, gemma3)")
+    local_menu = ctk.CTkOptionMenu(api, variable=local_var, values=_LOCAL_MODELS, width=140)
+    add_tooltip(local_menu, "Which local HuggingFace model to use for captioning.")
 
-    # -- Ollama rows --
-    ollama_url_label = ctk.CTkLabel(main, text="Ollama server URL:")
-    ollama_url_entry = ctk.CTkEntry(main, width=220, placeholder_text="http://localhost:11434")
+    # ollama
+    ollama_url_label = ctk.CTkLabel(api, text="Ollama server URL:")
+    ollama_url_entry = ctk.CTkEntry(api, width=240, placeholder_text="http://localhost:11434")
     ollama_url_entry.insert(0, backend_cfg.get("ollama_url", "http://localhost:11434"))
-    add_tooltip(ollama_url_entry, "Base URL of your running Ollama server")
-    ollama_model_label = ctk.CTkLabel(main, text="Ollama model:")
-    ollama_model_var = ctk.StringVar(value=backend_cfg.get("ollama_model", "llava"))
-    ollama_model_entry = ctk.CTkEntry(main, width=160, textvariable=ollama_model_var, placeholder_text="llava")
-    add_tooltip(ollama_model_entry, "Ollama model tag (e.g. llava, bakllava, moondream2)")
-    ollama_fetch_btn = ctk.CTkButton(main, text="Fetch models", width=110)
-    add_tooltip(ollama_fetch_btn, "Fetch available models from the Ollama server and fill the model field")
+    add_tooltip(ollama_url_entry, "Base URL of your running Ollama server.")
 
-    # -- OpenAI rows --
-    oai_key_label = ctk.CTkLabel(main, text="OpenAI API key:")
-    oai_key_entry = ctk.CTkEntry(main, width=260, show="*", placeholder_text="sk-…")
+    ollama_model_label = ctk.CTkLabel(api, text="Ollama model:")
+    ollama_model_var = ctk.StringVar(value=backend_cfg.get("ollama_model", "llava"))
+    ollama_model_entry = ctk.CTkEntry(api, width=160, textvariable=ollama_model_var, placeholder_text="llava")
+    add_tooltip(ollama_model_entry, "Ollama model tag — type manually or use Fetch models to pick from the server.")
+    ollama_fetch_btn = ctk.CTkButton(api, text="Fetch models", width=110)
+    add_tooltip(ollama_fetch_btn, "Fetch available models from the Ollama server.")
+    # Populated dropdown — hidden until a successful fetch
+    ollama_model_picker_label = ctk.CTkLabel(api, text="Select model:")
+    ollama_model_picker = ctk.CTkOptionMenu(api, variable=ollama_model_var, values=[""], width=200)
+    add_tooltip(ollama_model_picker,
+                "Click to select a model returned by Fetch models. "
+                "The selection also updates the text entry above.")
+
+    # openai
+    oai_key_label = ctk.CTkLabel(api, text="OpenAI API key:")
+    oai_key_entry = ctk.CTkEntry(api, width=260, show="*", placeholder_text="sk-…")
     oai_key_entry.insert(0, backend_cfg.get("openai_api_key", ""))
     add_tooltip(oai_key_entry, "Your OpenAI API key — get one at https://platform.openai.com/api-keys")
-    oai_model_label = ctk.CTkLabel(main, text="OpenAI model:")
-    oai_model_var = ctk.StringVar(value=backend_cfg.get("openai_model", "gpt-4o"))
-    oai_model_menu = ctk.CTkOptionMenu(main, variable=oai_model_var, values=_OPENAI_MODELS, width=160)
-    add_tooltip(oai_model_menu, "Vision-capable OpenAI model to use")
 
-    # -- Anthropic rows --
-    ant_key_label = ctk.CTkLabel(main, text="Anthropic API key:")
-    ant_key_entry = ctk.CTkEntry(main, width=260, show="*", placeholder_text="sk-ant-…")
+    oai_model_label = ctk.CTkLabel(api, text="OpenAI model:")
+    oai_model_var = ctk.StringVar(value=backend_cfg.get("openai_model", "gpt-4o"))
+    oai_model_menu = ctk.CTkOptionMenu(api, variable=oai_model_var, values=_OPENAI_MODELS, width=160)
+    add_tooltip(oai_model_menu, "Vision-capable OpenAI model to use.")
+
+    # anthropic
+    ant_key_label = ctk.CTkLabel(api, text="Anthropic API key:")
+    ant_key_entry = ctk.CTkEntry(api, width=260, show="*", placeholder_text="sk-ant-…")
     ant_key_entry.insert(0, backend_cfg.get("anthropic_api_key", ""))
     add_tooltip(ant_key_entry, "Your Anthropic API key — get one at https://console.anthropic.com")
-    ant_model_label = ctk.CTkLabel(main, text="Anthropic model:")
-    ant_model_var = ctk.StringVar(value=backend_cfg.get("anthropic_model", "claude-3-5-haiku-20241022"))
-    ant_model_menu = ctk.CTkOptionMenu(main, variable=ant_model_var, values=_ANTHROPIC_MODELS, width=220)
-    add_tooltip(ant_model_menu, "Claude model to use (haiku is cheapest, sonnet is best quality)")
 
-    # -- Gemini rows --
-    gem_key_label = ctk.CTkLabel(main, text="Gemini API key:")
-    gem_key_entry = ctk.CTkEntry(main, width=260, show="*", placeholder_text="AIza…")
+    ant_model_label = ctk.CTkLabel(api, text="Anthropic model:")
+    ant_model_var = ctk.StringVar(value=backend_cfg.get("anthropic_model", "claude-3-5-haiku-20241022"))
+    ant_model_menu = ctk.CTkOptionMenu(api, variable=ant_model_var, values=_ANTHROPIC_MODELS, width=220)
+    add_tooltip(ant_model_menu, "Claude model to use (haiku = fastest/cheapest, sonnet = best quality).")
+
+    # gemini
+    gem_key_label = ctk.CTkLabel(api, text="Gemini API key:")
+    gem_key_entry = ctk.CTkEntry(api, width=260, show="*", placeholder_text="AIza…")
     gem_key_entry.insert(0, backend_cfg.get("gemini_api_key", ""))
     add_tooltip(gem_key_entry, "Your Google Gemini API key — get one at https://aistudio.google.com/app/apikey")
-    gem_model_label = ctk.CTkLabel(main, text="Gemini model:")
-    gem_model_var = ctk.StringVar(value=backend_cfg.get("gemini_model", "gemini-1.5-flash-latest"))
-    gem_model_menu = ctk.CTkOptionMenu(main, variable=gem_model_var, values=_GEMINI_MODELS, width=180)
-    add_tooltip(gem_model_menu, "Google Gemini model to use")
 
-    # Test connection button (bottom of backend section)
-    test_btn_row = row + 20  # placeholder; we track actual row via _dynamic_rows
-    test_status_label = ctk.CTkLabel(main, text="", text_color="gray70")
+    gem_model_label = ctk.CTkLabel(api, text="Gemini model:")
+    gem_model_var = ctk.StringVar(value=backend_cfg.get("gemini_model", "gemini-2.5-flash"))
+    gem_model_menu = ctk.CTkOptionMenu(api, variable=gem_model_var, values=_GEMINI_MODELS, width=180)
+    add_tooltip(gem_model_menu, "Google Gemini model to use (install: pip install google-genai).")
 
-    # Track which rows are currently visible so we can show/hide cleanly
-    _col0_pad = (0, 10)
     _all_backend_widgets = [
-        (local_label, local_menu, None),
-        (ollama_url_label, ollama_url_entry, None),
-        (ollama_model_label, ollama_model_entry, ollama_fetch_btn),
-        (oai_key_label, oai_key_entry, None),
-        (oai_model_label, oai_model_menu, None),
-        (ant_key_label, ant_key_entry, None),
-        (ant_model_label, ant_model_menu, None),
-        (gem_key_label, gem_key_entry, None),
-        (gem_model_label, gem_model_menu, None),
+        (local_label,              local_menu,             None),
+        (ollama_url_label,         ollama_url_entry,       None),
+        (ollama_model_label,       ollama_model_entry,     ollama_fetch_btn),
+        (ollama_model_picker_label, ollama_model_picker,   None),
+        (oai_key_label,            oai_key_entry,          None),
+        (oai_model_label,          oai_model_menu,         None),
+        (ant_key_label,            ant_key_entry,          None),
+        (ant_model_label,          ant_model_menu,         None),
+        (gem_key_label,            gem_key_entry,          None),
+        (gem_model_label,          gem_model_menu,         None),
     ]
     _source_widgets = {
-        "local": [0],
-        "ollama": [1, 2],
-        "openai": [3, 4],
-        "anthropic": [5, 6],
-        "gemini": [7, 8],
+        "local":     [0],
+        "ollama":    [1, 2],          # picker row (3) shown only after a successful fetch
+        "openai":    [4, 5],
+        "anthropic": [6, 7],
+        "gemini":    [8, 9],
     }
+    # Index of the picker row — hidden by default, revealed after a successful fetch
+    _OLLAMA_PICKER_ROW = 3
 
-    # Assign each widget group a fixed grid row so show/hide is stable
-    _base_row = row  # current row before dynamic section
+    # Assign fixed grid rows inside tab_api
+    _base_row = row
     for idx, (lbl, wid, extra) in enumerate(_all_backend_widgets):
         r = _base_row + idx
-        lbl.grid(row=r, column=0, sticky="w", padx=_col0_pad, pady=3)
+        lbl.grid(row=r, column=0, sticky="w", padx=(0, 10), pady=3)
         wid.grid(row=r, column=1, sticky="w", pady=3)
         if extra:
             extra.grid(row=r, column=2, sticky="w", padx=(6, 0), pady=3)
 
     row = _base_row + len(_all_backend_widgets)
-    test_conn_btn = ctk.CTkButton(main, text="Test connection", width=130)
-    test_conn_btn.grid(row=row, column=1, sticky="w", pady=(6, 2))
-    add_tooltip(test_conn_btn, "Send a test caption request using the current backend settings")
+
+    # Separator before test connection
+    sep2 = ctk.CTkFrame(api, height=1, fg_color="gray40")
+    sep2.grid(row=row, column=0, columnspan=3, sticky="ew", pady=(10, 6))
     row += 1
+
+    test_conn_btn = ctk.CTkButton(api, text="Test connection", width=130)
+    test_conn_btn.grid(row=row, column=1, sticky="w", pady=(2, 2))
+    add_tooltip(test_conn_btn, "Send a test caption request using the current backend settings.")
+    row += 1
+
+    test_status_label = ctk.CTkLabel(api, text="", text_color="gray70", wraplength=340)
     test_status_label.grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 8))
     row += 1
 
@@ -235,7 +321,7 @@ def open_settings_dialog(parent, on_applied_callback=None):
                     extra.grid_remove()
 
     source_var.trace_add("write", _refresh_backend_rows)
-    _refresh_backend_rows()  # apply immediately
+    _refresh_backend_rows()
 
     def _fetch_ollama_models():
         url = ollama_url_entry.get().strip() or "http://localhost:11434"
@@ -245,13 +331,22 @@ def open_settings_dialog(parent, on_applied_callback=None):
                 from core.ai.caption_backends import OllamaBackend
                 models = OllamaBackend.list_models(base_url=url)
                 if models:
-                    ollama_model_var.set(models[0])
+                    ollama_model_picker.configure(values=models)
+                    # Keep current value if it's in the list; otherwise default to first
+                    cur = ollama_model_var.get()
+                    ollama_model_var.set(cur if cur in models else models[0])
+                    # Show the picker row
+                    lbl, wid, _ = _all_backend_widgets[_OLLAMA_PICKER_ROW]
+                    lbl.grid()
+                    wid.grid()
                     test_status_label.configure(
-                        text=f"Found {len(models)} model(s): {', '.join(models[:5])}",
+                        text=f"Found {len(models)} model(s) — select one below.",
                         text_color="green",
                     )
                 else:
-                    test_status_label.configure(text="No models found or Ollama not running.", text_color="orange")
+                    test_status_label.configure(
+                        text="No models found or Ollama not running.", text_color="orange"
+                    )
             except Exception as exc:
                 test_status_label.configure(text=f"Error: {exc}", text_color="red")
         threading.Thread(target=_do, daemon=True).start()
@@ -296,11 +391,24 @@ def open_settings_dialog(parent, on_applied_callback=None):
 
     test_conn_btn.configure(command=_test_connection)
 
-    # ── Save / Cancel ───────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────
+    # Save / Cancel  (outside the tabview, always visible)
+    # ─────────────────────────────────────────────────────────────
+
+    # Snapshot the original restart-sensitive values so we can detect changes
+    _orig_scale = float(profile.get("ui_scaling", 1.0))
+    _orig_theme = profile.get("color_theme", "blue")
+
+    def _do_restart():
+        """Spawn a fresh process and terminate the current one."""
+        try:
+            parent.winfo_toplevel().destroy()
+        except Exception:
+            pass
+        subprocess.Popen([sys.executable] + sys.argv)
+        sys.exit(0)
+
     def save():
-        scale = scale_var.get()
-        appearance = appearance_var.get()
-        trigger = trigger_entry.get().strip()
         fr_lines = fr_text.get("1.0", "end-1c").strip().splitlines()
         fr_pairs = []
         for line in fr_lines:
@@ -308,18 +416,27 @@ def open_settings_dialog(parent, on_applied_callback=None):
             if "|" in line:
                 a, _, b = line.partition("|")
                 fr_pairs.append([a.strip(), b.strip()])
+
         current = profiles.get_current_profile()
         name = profiles.config.get("current_profile", "User settings")
-        text_scale = text_scale_var.get()
-        current["ui_scaling"] = scale
-        current["text_scale"] = text_scale
-        current["appearance_mode"] = appearance
-        current["default_trigger_words"] = trigger
+
+        new_scale = scale_var.get()
+        new_theme = color_theme_var.get()
+
+        # Interface
+        current["ui_scaling"] = new_scale
+        current["text_scale"] = text_scale_var.get()
+        current["appearance_mode"] = appearance_var.get()
+        current["color_theme"] = new_theme
+
+        # Caption
+        current["default_trigger_words"] = trigger_entry.get().strip()
         current["default_find_replace"] = fr_pairs
         current["default_output_format"] = output_format_var.get()
         current["caption_system_prompt"] = system_prompt_text.get("1.0", "end-1c").strip()
         current["enable_nudenet"] = nudenet_var.get()
-        # Backend settings
+
+        # API & Models
         current["caption_source"] = source_var.get()
         current["caption_local_model"] = local_var.get()
         current["ollama_url"] = ollama_url_entry.get().strip()
@@ -330,24 +447,74 @@ def open_settings_dialog(parent, on_applied_callback=None):
         current["anthropic_model"] = ant_model_var.get()
         current["gemini_api_key"] = gem_key_entry.get().strip()
         current["gemini_model"] = gem_model_var.get()
+
         profiles.save_profile(name, current)
-        ctk.set_appearance_mode(appearance)
-        ctk.set_widget_scaling(scale)
-        ctk.set_window_scaling(scale)
+
+        ctk.set_appearance_mode(appearance_var.get())
+        ctk.set_widget_scaling(new_scale)
+        ctk.set_window_scaling(new_scale)
+
         if on_applied_callback:
             on_applied_callback()
-        messagebox.showinfo("Settings", "Settings saved to current profile.", parent=d)
-        d.destroy()
+
+        # Check whether a restart is needed (scale or theme changed)
+        needs_restart = (
+            abs(new_scale - _orig_scale) > 0.001
+            or new_theme != _orig_theme
+        )
+
+        if needs_restart:
+            _show_restart_dialog()
+        else:
+            messagebox.showinfo("Settings", "Settings saved.", parent=d)
+            d.destroy()
+
+    def _show_restart_dialog():
+        """Modal dialog offering an immediate restart when required settings changed."""
+        rd = ctk.CTkToplevel(d)
+        rd.title("Restart required")
+        rd.geometry("380x160")
+        rd.resizable(False, False)
+        rd.transient(d)
+        rd.grab_set()
+
+        ctk.CTkLabel(
+            rd,
+            text="Settings saved.\n\nUI scale and color theme changes take full\neffect after a restart.",
+            wraplength=340,
+            justify="center",
+        ).pack(pady=(20, 12))
+
+        btn_row = ctk.CTkFrame(rd, fg_color="transparent")
+        btn_row.pack(pady=(0, 16))
+
+        def _later():
+            rd.destroy()
+            d.destroy()
+
+        ctk.CTkButton(btn_row, text="Restart Now", width=130, command=_do_restart).pack(side="left", padx=8)
+        add_tooltip(
+            btn_row.winfo_children()[0],
+            "Close the app and immediately relaunch it to apply all changes.",
+        )
+        ctk.CTkButton(btn_row, text="Later", width=100, fg_color="gray", command=_later).pack(side="left", padx=8)
+        add_tooltip(
+            btn_row.winfo_children()[1],
+            "Close settings — changes will apply on the next manual restart.",
+        )
 
     btn_frame = ctk.CTkFrame(d, fg_color="transparent")
-    btn_frame.pack(fill="x", padx=15, pady=(0, 15))
-    _save_btn = ctk.CTkButton(btn_frame, text="Save", width=100, command=save)
-    _save_btn.pack(side="right", padx=5)
-    add_tooltip(_save_btn, "Save settings to the current profile")
-    _cancel_btn = ctk.CTkButton(btn_frame, text="Cancel", width=100, fg_color="gray", command=d.destroy)
-    _cancel_btn.pack(side="right")
-    add_tooltip(_cancel_btn, "Discard changes and close")
+    btn_frame.pack(fill="x", padx=12, pady=(6, 12))
 
+    _cancel_btn = ctk.CTkButton(btn_frame, text="Cancel", width=100, fg_color="gray", command=d.destroy)
+    _cancel_btn.pack(side="right", padx=(4, 0))
+    add_tooltip(_cancel_btn, "Discard changes and close.")
+
+    _save_btn = ctk.CTkButton(btn_frame, text="Save", width=100, command=save)
+    _save_btn.pack(side="right")
+    add_tooltip(_save_btn, "Save all settings to the current profile.")
+
+    # Apply live appearance immediately when the dropdown changes
     ctk.set_appearance_mode(appearance_var.get())
     ctk.set_widget_scaling(scale_var.get())
     ctk.set_window_scaling(scale_var.get())

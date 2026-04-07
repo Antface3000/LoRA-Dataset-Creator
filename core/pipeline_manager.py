@@ -1,6 +1,7 @@
 """Pipeline Manager - Orchestrates workflow between stages and manages state transitions."""
 
 import logging
+import shutil
 from queue import Queue
 from pathlib import Path
 from typing import Optional, List, Tuple
@@ -114,12 +115,16 @@ class PipelineManager:
         padding: int = 50,
         auto_bucket: bool = False,
         yolo_batch_size: int = 8,
+        min_dimension: int = 0,
         progress_callback=None,
     ) -> List[Path]:
         """Batch crop images using YOLO batch detection plus queued write stage.
 
         Parameters
         ----------
+        min_dimension:
+            If > 0, images whose shortest side is below this pixel count are
+            treated as already-cropped passthroughs (nocrop_ prefix copy).
         progress_callback:
             Optional callable(completed: int) called after each image is written,
             where *completed* is the 1-based count of images processed so far.
@@ -132,6 +137,7 @@ class PipelineManager:
 
         yolo_model = self.vram_manager.load_yolo()
         queued_inputs: Queue[tuple[Path, str, Image.Image, tuple[int, int, int, int]]] = Queue()
+        passthrough_paths: List[Path] = []
         written: List[Path] = []
 
         with self.metrics.time_stage("stage2_crop_batch_total", units=len(image_paths)):
@@ -139,8 +145,24 @@ class PipelineManager:
                 batch_paths = image_paths[i : i + max(1, yolo_batch_size)]
                 people_map = detect_people_batch(batch_paths, yolo_model, confidence)
                 for image_path in batch_paths:
-                    image = Image.open(image_path)
+                    # Minimum-dimension passthrough: skip re-cropping small images
+                    if min_dimension > 0:
+                        try:
+                            _img = Image.open(image_path)
+                            _img.load()
+                            if _img.width < min_dimension or _img.height < min_dimension:
+                                passthrough_paths.append(image_path)
+                                continue
+                        except Exception:
+                            pass
                     person = people_map.get(image_path)
+                    if person is None:
+                        # No person detected — image is likely already closely
+                        # cropped or a non-person subject. Copy as-is with the
+                        # nocrop_ prefix rather than blindly center-cropping.
+                        passthrough_paths.append(image_path)
+                        continue
+                    image = Image.open(image_path)
                     selected_bucket = bucket
                     if auto_bucket and person is not None:
                         selected_bucket = self.select_bucket_for_person(person.aspect_ratio)
@@ -148,6 +170,26 @@ class PipelineManager:
                     queued_inputs.put((image_path, selected_bucket, image, crop_box))
 
             completed = 0
+
+            # Write passthrough (no-person) images first
+            output_dir.mkdir(parents=True, exist_ok=True)
+            for image_path in passthrough_paths:
+                dest = output_dir / f"nocrop_{image_path.name}"
+                try:
+                    shutil.copy2(image_path, dest)
+                    written.append(dest)
+                except shutil.SameFileError:
+                    written.append(dest)
+                except Exception as exc:
+                    logger.warning("Passthrough copy failed for %s: %s", image_path, exc)
+                completed += 1
+                if progress_callback:
+                    try:
+                        progress_callback(completed)
+                    except Exception:
+                        pass
+
+            # Write cropped images
             while not queued_inputs.empty():
                 image_path, selected_bucket, image, crop_box = queued_inputs.get()
                 cropped = image.crop(crop_box)
