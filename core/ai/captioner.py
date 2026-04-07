@@ -25,13 +25,28 @@ from core.data.profiles import get_profiles_manager
 
 
 def _clean_caption(caption: str) -> str:
-    """Remove echoed 'Tags: ...' or tag-list suffix; return prose-only caption."""
+    """Remove echoed prompts, role markers, model junk, and 'Tags:' lines; return prose-only caption."""
     if not caption or not caption.strip():
         return caption
-    # Drop any line that starts with "Tags:" (model echoing the prompt)
+    # Drop lines that are model/debug noise or empty role markers
+    junk_line = re.compile(
+        r"^\s*("
+        r"encoding\s+image|"
+        r"decoding\s+image|"
+        r"USER\s*:\s*$|"
+        r"ASSISTANT\s*:\s*$|"
+        r"<\s*__media__\s*>"
+        r")",
+        re.I,
+    )
     lines = caption.split("\n")
     kept = []
     for line in lines:
+        if junk_line.search(line.strip()):
+            continue
+        # Dropped prompt echo (e.g. LLaVA-style USER: <__media__>…)
+        if "__media__" in line and re.search(r"USER\s*:", line, re.I):
+            continue
         if re.match(r"^\s*[Tt]ags\s*:\s*", line.strip()):
             break
         kept.append(line)
@@ -40,6 +55,17 @@ def _clean_caption(caption: str) -> str:
     match = re.search(r"\s+[Tt]ags\s*:\s*[^\n]+$", caption)
     if match:
         caption = caption[: match.start()].strip()
+    # Strip leading role echoes (possibly repeated)
+    for _ in range(4):
+        prev = caption
+        caption = re.sub(
+            r"^\s*(USER|ASSISTANT)\s*:\s*",
+            "",
+            caption,
+            flags=re.I,
+        ).strip()
+        if caption == prev:
+            break
     return caption.strip()
 
 
@@ -111,7 +137,34 @@ def _get_active_system_prompt() -> str:
     )
 
 
-def _llama_finalize_caption(tags: list, vision_description: str, user_prompt: str = "") -> str:
+def _resolve_local_caption_system(system_prompt_override: Optional[str]) -> str:
+    """System text for local vision + Llama: UI override if non-empty, else profile/default."""
+    if system_prompt_override is not None and str(system_prompt_override).strip():
+        return str(system_prompt_override).strip()
+    text = _get_active_system_prompt()
+    if not (text or "").strip() and CAPTION_SYSTEM_PROMPT:
+        return CAPTION_SYSTEM_PROMPT
+    return text
+
+
+def _vision_user_prompt_from_tags(tags: list[str]) -> str:
+    """Vision-stage user text: tag-grounded, no fixed sentence count (system prompt sets style/length)."""
+    tag_string = ", ".join(tags) if tags else ""
+    if tag_string:
+        return (
+            "Describe the image in natural prose. These tags are ground truth—your description must "
+            "reflect the same level of specificity; do not soften or omit: "
+            f"{tag_string}."
+        )
+    return "Describe the image in natural prose. Focus on visible details accurately."
+
+
+def _llama_finalize_caption(
+    tags: list,
+    vision_description: str,
+    user_prompt: str = "",
+    system_prompt: Optional[str] = None,
+) -> str:
     """Send tags + vision description to caption LLM (Vicuna); return one coherent natural language caption."""
     llama = get_caption_llama()
     if llama is None:
@@ -127,12 +180,12 @@ def _llama_finalize_caption(tags: list, vision_description: str, user_prompt: st
     if user_prompt:
         user_content += f"Additional guidance: {user_prompt}\n\n"
     user_content += (
-        "Write one coherent caption (1-2 sentences) that incorporates every tag above in natural prose. "
+        "Incorporate every tag above in natural prose. "
         "Do not omit any tag. Do not replace any tag with a softer or vaguer word."
     )
     # Vicuna has no system role; combine system instruction with user content into one user message
-    system_prompt = _get_active_system_prompt()
-    combined = system_prompt + "\n\n" + user_content
+    sys_text = (system_prompt or "").strip() or _get_active_system_prompt()
+    combined = sys_text + "\n\n" + user_content
     messages = [{"role": "user", "content": combined}]
     try:
         response = llama.create_chat_completion(
@@ -584,7 +637,12 @@ class JoyCaption:
         except Exception as e:
             raise RuntimeError(f"Failed to load model: {e}")
     
-    def _run_vision_inference(self, image_path: Path, prompt_text: str) -> str:
+    def _run_vision_inference(
+        self,
+        image_path: Path,
+        prompt_text: str,
+        system_prompt: str = "",
+    ) -> str:
         """Run vision model on image with the given prompt; return model output (vision description)."""
         if self.model is None:
             self.load_model(model_type=self.model_type)
@@ -598,8 +656,9 @@ class JoyCaption:
             if self.is_gguf:
                 image_url_str = image_path.resolve().as_uri()
                 messages = []
-                if CAPTION_SYSTEM_PROMPT:
-                    messages.append({"role": "system", "content": CAPTION_SYSTEM_PROMPT})
+                sys_msg = (system_prompt or "").strip() or (CAPTION_SYSTEM_PROMPT or "").strip()
+                if sys_msg:
+                    messages.append({"role": "system", "content": sys_msg})
                 messages.append({
                     "role": "user",
                     "content": [
@@ -650,27 +709,26 @@ class JoyCaption:
         self,
         image_path: Path,
         tags: list[str],
-        user_prompt: str = ""
+        user_prompt: str = "",
+        system_prompt: str = "",
     ) -> str:
         """Generate natural language caption: WD14 tags -> JoyCaption vision -> Llama 3 final caption.
         
         If CAPTION_LLAMA_GGUF_PATH exists: get vision description from JoyCaption, then send
         tags + vision description to Llama 3 and return its output. Otherwise use single-model path.
+
+        ``system_prompt`` should be the resolved profile/UI system text (same as Step 3 field).
         """
         use_llama = CAPTION_LLAMA_GGUF_PATH.exists() and CAPTION_LLAMA_GGUF_PATH.is_file()
         if use_llama:
             logger.info("Caption flow: WD14 tags (%d) -> JoyCaption vision -> Llama", len(tags))
-            tag_string = ", ".join(tags) if tags else ""
-            if tag_string:
-                vision_prompt = (
-                    "Describe what you see in this image in one or two sentences. "
-                    "The image has been tagged as follows; your description must reflect these specifics using the same level of detail—do not soften or omit: "
-                    f"{tag_string}."
-                )
-            else:
-                vision_prompt = "Describe what you see in this image in one or two sentences."
-            vision_desc = self._run_vision_inference(image_path, vision_prompt)
-            return _llama_finalize_caption(tags, vision_desc, user_prompt)
+            vision_prompt = _vision_user_prompt_from_tags(tags)
+            vision_desc = self._run_vision_inference(
+                image_path, vision_prompt, system_prompt=system_prompt
+            )
+            return _llama_finalize_caption(
+                tags, vision_desc, user_prompt, system_prompt=system_prompt
+            )
         # Legacy single-model path
         logger.info("Caption flow: legacy single-model (JoyCaption with tags in prompt)")
         if self.model is None:
@@ -679,11 +737,16 @@ class JoyCaption:
             return _post_process_caption(", ".join(tags) if tags else "A photograph.")
         tag_string = ", ".join(tags)
         if user_prompt:
-            prompt = f"{user_prompt} Write 1-2 full sentences only. Use these as reference (do not list them): {tag_string}"
+            prompt = (
+                f"{user_prompt} Use these tags as ground truth (do not output as a list): {tag_string}"
+            )
         else:
-            prompt = f"Write one or two short sentences describing this image. Use these as reference only (do not list them): {tag_string}"
+            prompt = (
+                "Describe this image in natural prose. "
+                f"These tags are ground truth (do not output as a list): {tag_string}"
+            )
         try:
-            caption = self._run_vision_inference(image_path, prompt)
+            caption = self._run_vision_inference(image_path, prompt, system_prompt=system_prompt)
             out = caption if caption else f"A photograph featuring {', '.join(tags[:5])}."
             return _post_process_caption(out)
         except Exception as e:
@@ -764,21 +827,24 @@ def generate_caption(
             system_prompt=active_sys_prompt,
         )
 
-    # Local path — delegate to Captioner class
+    # Local path — same resolved system as remote (profile + Step 3 override)
     captioner = get_captioner()
     if model_override:
         captioner._active_model = model_override
+    resolved_system = _resolve_local_caption_system(system_prompt_override)
     return captioner.generate_caption(
         image_path,
         tags,
         prompt_override or user_prompt,
+        system_prompt=resolved_system,
     )
 
 
 def run_caption_batch_two_phase(
     paths: list,
     tag_threshold: float = 0.5,
-    user_prompt: str = ""
+    user_prompt: str = "",
+    system_prompt: Optional[str] = None,
 ) -> list:
     """Run captioning in two phases to avoid VRAM bottleneck: vision (tag + describe) for all, then unload vision and run Llama for all.
     
@@ -803,21 +869,16 @@ def run_caption_batch_two_phase(
             "WD14 model failed to load. Check the log for 'Failed to load WD14 model' (e.g. network, ONNX, or HuggingFace). Cannot run batch captioning."
         )
     captioner = get_captioner()
+    resolved_system = _resolve_local_caption_system(system_prompt)
     # Phase 1: tag + vision description for all images (vision prompt includes tags so VLM uses same specificity)
     phase1_results = []
     for i, path in enumerate(paths):
         logger.info("Phase 1: %d/%d %s", i + 1, len(paths), path.name)
         tags = tag_image(path, threshold=tag_threshold)
-        tag_string = ", ".join(tags) if tags else ""
-        if tag_string:
-            vision_prompt = (
-                "Describe what you see in this image in one or two sentences. "
-                "The image has been tagged as follows; your description must reflect these specifics using the same level of detail—do not soften or omit: "
-                f"{tag_string}."
-            )
-        else:
-            vision_prompt = "Describe what you see in this image in one or two sentences."
-        vision_desc = captioner._run_vision_inference(path, vision_prompt)
+        vision_prompt = _vision_user_prompt_from_tags(tags)
+        vision_desc = captioner._run_vision_inference(
+            path, vision_prompt, system_prompt=resolved_system
+        )
         phase1_results.append((path, tags, vision_desc))
         logger.debug("  tags=%d, vision_desc len=%d", len(tags), len(vision_desc or ""))
     logger.info("Phase 1 done; unloading vision models")
@@ -828,7 +889,9 @@ def run_caption_batch_two_phase(
     out = []
     for i, (path, tags, vision_desc) in enumerate(phase1_results):
         logger.info("Phase 2: %d/%d %s", i + 1, len(phase1_results), path.name)
-        caption = _llama_finalize_caption(tags, vision_desc, user_prompt)
+        caption = _llama_finalize_caption(
+            tags, vision_desc, user_prompt, system_prompt=resolved_system
+        )
         out.append((path, tags, caption))
     logger.info("Batch caption complete: %d captions", len(out))
     return out

@@ -5,10 +5,11 @@ import tkinter as tk
 from pathlib import Path
 from typing import Optional, Callable, List
 from tkinter import filedialog, messagebox
+import queue
 import threading
 
 from PIL import Image, ImageTk
-from core.session import get_session, SessionItem
+from core.session import get_session
 from core.config import VALID_EXTENSIONS
 from core.data.profiles import get_profiles_manager
 from core.data.file_handler import load_image_files
@@ -16,7 +17,37 @@ from core.ai.vram import get_vram_manager, State
 from core.ai.tagger import tag_image, get_tagger
 from core.ai.captioner import generate_caption
 import core.config as core_config
+from ui.caption_prompt_presets_ui import build_preset_row
 from ui.tooltip import add_tooltip
+
+# Step 3 master tag list: cap rows so the UI stays responsive (filter narrows further)
+MASTER_TAG_MAX_RENDER = 500
+
+# Profile keys / UI labels for master tag pool (union across session)
+MASTER_TAG_LIST_MODE_SCANNED_KEY = "scanned"
+MASTER_TAG_LIST_MODE_FULL_KEY = "full"
+MASTER_TAG_LIST_MODE_SCANNED_UI = "Scanned tags (WD14)"
+MASTER_TAG_LIST_MODE_FULL_UI = "All session tags"
+
+
+def _normalize_master_tag_list_mode_key(raw) -> str:
+    """Map profile value to scanned|full (tolerates legacy or odd casing)."""
+    if raw == MASTER_TAG_LIST_MODE_FULL_KEY:
+        return MASTER_TAG_LIST_MODE_FULL_KEY
+    if not isinstance(raw, str):
+        return MASTER_TAG_LIST_MODE_SCANNED_KEY
+    s = raw.strip().lower()
+    if s in (MASTER_TAG_LIST_MODE_FULL_KEY, "all", "all_session", "all session"):
+        return MASTER_TAG_LIST_MODE_FULL_KEY
+    return MASTER_TAG_LIST_MODE_SCANNED_KEY
+
+
+def _schedule_main(callback):
+    """Run callback on the Tk main loop (safe to call from a worker thread)."""
+    from ui.app_main import get_app
+    app = get_app()
+    if app is not None:
+        app.root.after(0, callback)
 
 
 def _make_zoom_pan_canvas(parent, width: int = 320, height: int = 320) -> tk.Canvas:
@@ -435,6 +466,12 @@ class StepCaptions(ctk.CTkFrame):
         self._caption_stop_event = _threading.Event()
         self._tags_stop_event = _threading.Event()
         self._tag_master_set: set = set()
+        self._tags_panel_open = True
+        self._caption_panel_open = True
+        self._batch_ui_queue: queue.SimpleQueue = queue.SimpleQueue()
+        self._batch_ui_polling = False
+        self._master_tag_pool_use_full = False
+        self._master_tag_list_menu: Optional[ctk.CTkOptionMenu] = None
         self._build_ui()
 
     def apply_profile(self, profile: dict) -> None:
@@ -447,79 +484,109 @@ class StepCaptions(ctk.CTkFrame):
         self.session.set_output_format(self.output_format_var.get())
         if hasattr(self, "system_prompt_text"):
             self._load_system_prompt_from_profile()
+        if hasattr(self, "_master_tag_list_mode_var"):
+            self._apply_master_tag_list_mode_from_profile_dict(profile)
+
+    def _apply_master_tag_list_mode_from_profile_dict(self, profile: dict) -> None:
+        key = _normalize_master_tag_list_mode_key(profile.get("master_tag_list_mode"))
+        self._master_tag_pool_use_full = key == MASTER_TAG_LIST_MODE_FULL_KEY
+        ui = (
+            MASTER_TAG_LIST_MODE_FULL_UI if self._master_tag_pool_use_full
+            else MASTER_TAG_LIST_MODE_SCANNED_UI
+        )
+        self._master_tag_list_mode_var.set(ui)
+        menu = getattr(self, "_master_tag_list_menu", None)
+        if menu is not None:
+            try:
+                menu.set(ui)
+            except Exception:
+                pass
+
+    def _on_master_tag_list_mode_changed(self, choice: str) -> None:
+        self._master_tag_pool_use_full = choice == MASTER_TAG_LIST_MODE_FULL_UI
+        pm = get_profiles_manager()
+        name = pm.config.get("current_profile", "User settings")
+        # Always shallow-copy the full current profile — never save from load_profile(...) or {}
+        # or a missing profile would wipe other keys.
+        prof = dict(pm.get_current_profile())
+        prof["master_tag_list_mode"] = (
+            MASTER_TAG_LIST_MODE_FULL_KEY if self._master_tag_pool_use_full
+            else MASTER_TAG_LIST_MODE_SCANNED_KEY
+        )
+        pm.save_profile(name, prof)
+        self._build_tag_master_set()
+        self._rebuild_tag_list()
 
     def _build_ui(self):
-        # Top controls — split into two rows so narrow windows don't clip buttons
+        # Top: hint + one general bar (session controls). Tag/caption actions live above each column.
         top = ctk.CTkFrame(self, fg_color="transparent")
         top.pack(fill="x", padx=10, pady=5)
         ctk.CTkLabel(top, text="Select an image (index), then generate or edit tags and caption.",
                      font=ctk.CTkFont(size=12)).pack(anchor="w", pady=(0, 2))
 
-        # Row 1: per-image controls
-        row1 = ctk.CTkFrame(top, fg_color="transparent")
-        row1.pack(fill="x", pady=(0, 2))
+        general_bar = ctk.CTkFrame(top, fg_color="transparent")
+        general_bar.pack(fill="x", pady=(0, 2))
         self.index_var = ctk.StringVar(value="1")
-        ctk.CTkLabel(row1, text="Image index:").pack(side="left", padx=(0, 5))
-        _index_entry = ctk.CTkEntry(row1, textvariable=self.index_var, width=60)
+        ctk.CTkLabel(general_bar, text="Image index:").pack(side="left", padx=(0, 5))
+        _index_entry = ctk.CTkEntry(general_bar, textvariable=self.index_var, width=60)
         _index_entry.pack(side="left", padx=(0, 10))
         add_tooltip(_index_entry, "1-based index of the image to load from the session list")
-        _load_btn = ctk.CTkButton(row1, text="Load", width=70, command=self._load_index)
+        _load_btn = ctk.CTkButton(general_bar, text="Load", width=70, command=self._load_index)
         _load_btn.pack(side="left", padx=(0, 5))
         add_tooltip(_load_btn, "Load the image at the given index into the tag and caption editors")
-        ctk.CTkLabel(row1, text="Tag threshold:").pack(side="left", padx=(10, 2))
+        ctk.CTkLabel(general_bar, text="Tag threshold:").pack(side="left", padx=(10, 2))
         self.threshold_var = ctk.DoubleVar(value=0.5)
-        _threshold_slider = ctk.CTkSlider(row1, from_=0.35, to=0.85, variable=self.threshold_var, width=80)
+        _threshold_slider = ctk.CTkSlider(
+            general_bar, from_=0.35, to=0.85, variable=self.threshold_var, width=80
+        )
         _threshold_slider.pack(side="left", padx=2)
-        add_tooltip(_threshold_slider, "Minimum confidence for a WD14 tag to be included (higher = fewer, more confident tags)")
-        self._btn_tags = ctk.CTkButton(row1, text="Generate tags", width=100, command=self._gen_tags)
-        self._btn_tags.pack(side="left", padx=(10, 5))
-        add_tooltip(self._btn_tags, "Run the WD14 tagger on this image")
-        self._btn_caption = ctk.CTkButton(row1, text="Generate caption", width=120, command=self._gen_caption)
-        self._btn_caption.pack(side="left", padx=5)
-        add_tooltip(self._btn_caption, "Run the vision model to generate a natural-language caption for this image")
-
-        # Row 2: batch / session controls
-        row2 = ctk.CTkFrame(top, fg_color="transparent")
-        row2.pack(fill="x", pady=(0, 2))
-        self._btn_batch_tags = ctk.CTkButton(row2, text="Batch tags (all)", width=120, command=self._batch_gen_tags)
-        self._btn_batch_tags.pack(side="left", padx=(0, 5))
-        add_tooltip(self._btn_batch_tags, "Tag every image in the session using WD14")
-        self._btn_batch_caption = ctk.CTkButton(row2, text="Batch caption (all)", width=140, command=self._batch_gen_captions)
-        self._btn_batch_caption.pack(side="left", padx=5)
-        add_tooltip(self._btn_batch_caption, "Caption every image in the session using the vision model")
-        self._btn_stop_caption = ctk.CTkButton(row2, text="Stop", width=60,
-                                               fg_color="darkred", command=self._stop_captioning_batch)
-        self._btn_stop_caption.pack(side="left", padx=(0, 5))
-        self._btn_stop_caption.pack_forget()
-        add_tooltip(self._btn_stop_caption,
-                    "Stop batch captioning after the current image finishes. "
-                    "Already-completed captions are kept.\n\n"
-                    "Tip: you can also open Settings and change 'Caption source' to 'local' "
-                    "to switch to a local model — it takes effect on the next image.")
-        self._btn_save_edits = ctk.CTkButton(row2, text="Save edits", width=90,
-                                             fg_color="darkgreen", command=self._save_and_confirm)
+        add_tooltip(
+            _threshold_slider,
+            "Minimum confidence for a WD14 tag to be included (higher = fewer, more confident tags)",
+        )
+        self._btn_stop_caption = ctk.CTkButton(
+            general_bar, text="Stop", width=60,
+            fg_color="darkred", command=self._stop_captioning_batch,
+        )
+        add_tooltip(
+            self._btn_stop_caption,
+            "Stop batch captioning or tagging after the current image finishes. "
+            "Already-completed work is kept.\n\n"
+            "Tip: you can also open Settings and change 'Caption source' to 'local' "
+            "to switch to a local model — it takes effect on the next image.",
+        )
+        self._btn_save_edits = ctk.CTkButton(
+            general_bar, text="Save edits", width=90,
+            fg_color="darkgreen", command=self._save_and_confirm,
+        )
         self._btn_save_edits.pack(side="left", padx=(10, 5))
-        add_tooltip(self._btn_save_edits, "Save the current tags and caption edits to the session (auto-saved when switching images)")
-        self._loading_label = ctk.CTkLabel(row2, text="", text_color="gray70")
+        add_tooltip(
+            self._btn_save_edits,
+            "Save the current tags and caption edits to the session (auto-saved when switching images)",
+        )
+        self._loading_label = ctk.CTkLabel(general_bar, text="", text_color="gray70")
         self._loading_label.pack(side="left", padx=(10, 0))
-        ctk.CTkLabel(row2, text="Output:").pack(side="left", padx=(10, 2))
+        ctk.CTkLabel(general_bar, text="Output:").pack(side="left", padx=(10, 2))
         self.output_format_var = ctk.StringVar(value="Natural language")
-        om = ctk.CTkOptionMenu(row2, variable=self.output_format_var,
-                               values=["Tags only", "Natural language", "Both"], width=120)
+        om = ctk.CTkOptionMenu(
+            general_bar, variable=self.output_format_var,
+            values=["Tags only", "Natural language", "Both"], width=120,
+        )
         om.pack(side="left", padx=2)
         add_tooltip(om, "Choose whether to write tags only, a natural-language caption, or both to the .txt sidecar")
         self.output_format_var.trace_add("write", lambda *a: self.session.set_output_format(self.output_format_var.get()))
-        ctk.CTkLabel(row2, text="Trigger words:").pack(side="left", padx=(10, 2))
-        self.trigger_entry = ctk.CTkEntry(row2, placeholder_text="e.g. mylora", width=100)
+        ctk.CTkLabel(general_bar, text="Trigger words:").pack(side="left", padx=(10, 2))
+        self.trigger_entry = ctk.CTkEntry(general_bar, placeholder_text="e.g. mylora", width=100)
         self.trigger_entry.pack(side="left", padx=2)
         add_tooltip(self.trigger_entry, "Words prepended to every caption (e.g. your LoRA trigger token)")
-        _export_btn = ctk.CTkButton(row2, text="Export .md", width=90, command=self._export_markdown)
+        _export_btn = ctk.CTkButton(general_bar, text="Export .md", width=90, command=self._export_markdown)
         _export_btn.pack(side="left", padx=(10, 2))
-        add_tooltip(_export_btn,
-                    "Export all session tags and captions to a Markdown file.\n"
-                    "Each entry is numbered and named after its source image.")
-        # keep a reference so _set_loading can pack/forget Stop inside row2
-        self._toolbar_row2 = row2
+        add_tooltip(
+            _export_btn,
+            "Export all session tags and captions to a Markdown file.\n"
+            "Each entry is numbered and named after its source image.",
+        )
+        self._toolbar_general = general_bar
 
         # Main content area: left = list + preview, right = tags/caption editors
         content = ctk.CTkFrame(self, fg_color="transparent")
@@ -556,75 +623,174 @@ class StepCaptions(ctk.CTkFrame):
         _reset_btn3.pack(side="left")
         add_tooltip(_reset_btn3, "Reset zoom and pan to the original view")
 
-        # Right column: tags | caption side-by-side, prompt + system prompt below
+        # Right column: collapsible tags panel | collapsible caption+prompts (horizontal pack)
         right = ctk.CTkFrame(content, fg_color="transparent")
         right.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
-        right.grid_columnconfigure(0, weight=1)
-        right.grid_columnconfigure(1, weight=1)
-        right.grid_rowconfigure(1, weight=1)
 
-        # Tags header row with count label
-        tag_hdr = ctk.CTkFrame(right, fg_color="transparent")
-        tag_hdr.grid(row=0, column=0, sticky="ew", pady=(0, 3))
-        ctk.CTkLabel(tag_hdr, text="Tags",
+        # ---- Tags panel (collapsible) ----
+        self._tags_panel = ctk.CTkFrame(right, fg_color="transparent")
+        self._tags_panel.pack(side="left", fill="both", expand=True)
+
+        tags_action_row = ctk.CTkFrame(self._tags_panel, fg_color="transparent")
+        tags_action_row.pack(fill="x", pady=(0, 4))
+        self._btn_tags = ctk.CTkButton(tags_action_row, text="Generate tags", width=100, command=self._gen_tags)
+        self._btn_tags.pack(side="left", padx=(0, 6))
+        add_tooltip(self._btn_tags, "Run the WD14 tagger on this image")
+        self._btn_batch_tags = ctk.CTkButton(tags_action_row, text="Batch tags (all)", width=120, command=self._batch_gen_tags)
+        self._btn_batch_tags.pack(side="left", padx=(0, 4))
+        add_tooltip(self._btn_batch_tags, "Tag every image in the session using WD14")
+
+        tags_hdr = ctk.CTkFrame(self._tags_panel, fg_color="transparent")
+        tags_hdr.pack(fill="x", pady=(0, 3))
+        self._tags_toggle_btn = ctk.CTkButton(
+            tags_hdr, text="◀", width=28, command=self._toggle_tags_panel
+        )
+        self._tags_toggle_btn.pack(side="left", padx=(0, 4))
+        add_tooltip(self._tags_toggle_btn, "Collapse or expand the tags column")
+        ctk.CTkLabel(tags_hdr, text="Tags",
                      font=ctk.CTkFont(weight="bold")).pack(side="left")
-        self._tag_count_label = ctk.CTkLabel(tag_hdr, text="",
+        self._tag_count_label = ctk.CTkLabel(tags_hdr, text="",
                                              text_color="gray60",
                                              font=ctk.CTkFont(size=11))
         self._tag_count_label.pack(side="left", padx=(6, 0))
-
-        # Tag picker frame (replaces tags_text)
-        tag_frame = ctk.CTkFrame(right, fg_color="transparent")
-        tag_frame.grid(row=1, column=0, sticky="nsew")
-        tag_frame.grid_rowconfigure(1, weight=1)
-        tag_frame.grid_columnconfigure(0, weight=1)
-
-        # Filter + add-tag control row
-        ctrl_row = ctk.CTkFrame(tag_frame, fg_color="transparent")
-        ctrl_row.grid(row=0, column=0, sticky="ew", pady=(0, 3))
         self._tag_filter_var = ctk.StringVar()
         self._tag_filter_var.trace_add("write", lambda *_: self._rebuild_tag_list())
-        _filter_entry = ctk.CTkEntry(ctrl_row, textvariable=self._tag_filter_var,
-                                     placeholder_text="Filter tags…", width=110)
-        _filter_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
-        add_tooltip(_filter_entry, "Type to filter visible tags")
-        self._new_tag_entry = ctk.CTkEntry(ctrl_row, placeholder_text="New tag", width=80)
+        _filter_entry = ctk.CTkEntry(tags_hdr, textvariable=self._tag_filter_var,
+                                     placeholder_text="Filter…", width=90)
+        _filter_entry.pack(side="left", fill="x", expand=True, padx=(6, 4))
+        add_tooltip(_filter_entry, "Type to filter visible tags in both lists")
+        self._new_tag_entry = ctk.CTkEntry(tags_hdr, placeholder_text="New tag", width=72)
         self._new_tag_entry.pack(side="left", padx=(0, 3))
         self._new_tag_entry.bind("<Return>", lambda _e: self._add_manual_tag())
-        _add_btn = ctk.CTkButton(ctrl_row, text="+", width=28, command=self._add_manual_tag)
+        _add_btn = ctk.CTkButton(tags_hdr, text="+", width=28, command=self._add_manual_tag)
         _add_btn.pack(side="left")
         add_tooltip(_add_btn, "Add a new tag to the current image and master list")
 
-        # Scrollable tag list
-        self._tag_list_frame = ctk.CTkScrollableFrame(tag_frame)
-        self._tag_list_frame.grid(row=1, column=0, sticky="nsew")
+        self._tags_content = ctk.CTkFrame(self._tags_panel, fg_color="transparent")
+        self._tags_content.pack(fill="both", expand=True)
+        self._tags_content.grid_columnconfigure(0, weight=1)
+        self._tags_content.grid_rowconfigure(1, weight=1)
+        self._tags_content.grid_rowconfigure(4, weight=1)
 
-        ctk.CTkLabel(right, text="Caption", font=ctk.CTkFont(weight="bold")).grid(
-            row=0, column=1, sticky="w", pady=(0, 5), padx=(8, 0)
+        ctk.CTkLabel(self._tags_content, text="Current image",
+                     font=ctk.CTkFont(size=11), text_color="gray60").grid(
+            row=0, column=0, sticky="w", pady=(0, 2)
         )
-        self.caption_text = ctk.CTkTextbox(right)
-        self.caption_text.grid(row=1, column=1, sticky="nsew", padx=(8, 0))
+        self._current_tag_frame = ctk.CTkScrollableFrame(self._tags_content, height=100)
+        self._current_tag_frame.grid(row=1, column=0, sticky="nsew", pady=(0, 4))
 
-        ctk.CTkLabel(right, text="User prompt (optional):",
-                     font=ctk.CTkFont(size=11)).grid(
-            row=2, column=0, columnspan=2, sticky="w", pady=(6, 0)
+        sep_tags = ctk.CTkFrame(self._tags_content, height=1, fg_color="gray40")
+        sep_tags.grid(row=2, column=0, sticky="ew", pady=2)
+
+        master_hdr = ctk.CTkFrame(self._tags_content, fg_color="transparent")
+        master_hdr.grid(row=3, column=0, sticky="ew", pady=(2, 2))
+        master_hdr.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            master_hdr, text="Session tag pool",
+            font=ctk.CTkFont(size=11), text_color="gray60",
+        ).grid(row=0, column=0, sticky="w")
+        _mt_key = _normalize_master_tag_list_mode_key(
+            get_profiles_manager().get_current_profile().get("master_tag_list_mode")
         )
-        self.prompt_entry = ctk.CTkEntry(right, placeholder_text="e.g. Focus on the clothing style.")
-        self.prompt_entry.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(2, 0))
+        self._master_tag_pool_use_full = _mt_key == MASTER_TAG_LIST_MODE_FULL_KEY
+        _mt_initial = (
+            MASTER_TAG_LIST_MODE_FULL_UI if self._master_tag_pool_use_full
+            else MASTER_TAG_LIST_MODE_SCANNED_UI
+        )
+        self._master_tag_list_mode_var = tk.StringVar(value=_mt_initial)
+        _mt_menu = ctk.CTkOptionMenu(
+            master_hdr,
+            variable=self._master_tag_list_mode_var,
+            values=[MASTER_TAG_LIST_MODE_SCANNED_UI, MASTER_TAG_LIST_MODE_FULL_UI],
+            width=200,
+            command=self._on_master_tag_list_mode_changed,
+        )
+        _mt_menu.grid(row=0, column=1, sticky="e", padx=(8, 0))
+        self._master_tag_list_menu = _mt_menu
+        add_tooltip(
+            _mt_menu,
+            "Scanned: union of WD14 results only (manual tags stay on images but do not fill this list). "
+            "All session: union of every tag on every image, including manual adds.",
+        )
+
+        self._master_tag_frame = ctk.CTkScrollableFrame(self._tags_content, height=100)
+        self._master_tag_frame.grid(row=4, column=0, sticky="nsew")
+
+        # ---- Caption panel (collapsible; prompts live here) ----
+        self._caption_panel = ctk.CTkFrame(right, fg_color="transparent")
+        self._caption_panel.pack(side="left", fill="both", expand=True, padx=(8, 0))
+
+        caption_action_row = ctk.CTkFrame(self._caption_panel, fg_color="transparent")
+        caption_action_row.pack(fill="x", pady=(0, 4))
+        self._btn_caption = ctk.CTkButton(
+            caption_action_row, text="Generate caption", width=120, command=self._gen_caption
+        )
+        self._btn_caption.pack(side="left", padx=(0, 6))
+        add_tooltip(self._btn_caption, "Run the vision model to generate a natural-language caption for this image")
+        self._btn_batch_caption = ctk.CTkButton(
+            caption_action_row, text="Batch caption (all)", width=140, command=self._batch_gen_captions
+        )
+        self._btn_batch_caption.pack(side="left", padx=(0, 4))
+        add_tooltip(self._btn_batch_caption, "Caption every image in the session using the vision model")
+
+        caption_hdr = ctk.CTkFrame(self._caption_panel, fg_color="transparent")
+        caption_hdr.pack(fill="x", pady=(0, 3))
+        self._caption_toggle_btn = ctk.CTkButton(
+            caption_hdr, text="◀", width=28, command=self._toggle_caption_panel
+        )
+        self._caption_toggle_btn.pack(side="left", padx=(0, 4))
+        add_tooltip(self._caption_toggle_btn, "Collapse or expand the caption column")
+        ctk.CTkLabel(caption_hdr, text="Caption",
+                     font=ctk.CTkFont(weight="bold")).pack(side="left")
+
+        self._caption_content = ctk.CTkFrame(self._caption_panel, fg_color="transparent")
+        self._caption_content.pack(fill="both", expand=True)
+
+        self.caption_text = ctk.CTkTextbox(self._caption_content)
+        self.caption_text.pack(fill="both", expand=True, pady=(0, 4))
+
+        self.prompt_entry = ctk.CTkEntry(
+            self._caption_content, placeholder_text="e.g. Focus on the clothing style."
+        )
+        self.system_prompt_text = ctk.CTkTextbox(self._caption_content, height=80, wrap="word")
+
+        preset_host = ctk.CTkFrame(self._caption_content, fg_color="transparent")
+
+        def _preset_set_system(s: str) -> None:
+            self.system_prompt_text.delete("1.0", "end")
+            self.system_prompt_text.insert("1.0", s)
+
+        def _preset_set_user(s: str) -> None:
+            self.prompt_entry.delete(0, "end")
+            if s:
+                self.prompt_entry.insert(0, s)
+
+        self._refresh_caption_preset_menu, self._caption_preset_var = build_preset_row(
+            preset_host,
+            set_system_text=_preset_set_system,
+            set_user_text=_preset_set_user,
+            save_system_to_profile=self._save_system_prompt_to_profile,
+            get_system_text=lambda: self.system_prompt_text.get("1.0", "end-1c"),
+            get_user_text=lambda: self.prompt_entry.get(),
+        )
+        preset_host.pack(fill="x", pady=(0, 4))
+
+        ctk.CTkLabel(self._caption_content, text="User prompt (optional):",
+                     font=ctk.CTkFont(size=11)).pack(anchor="w", pady=(2, 0))
+        self.prompt_entry.pack(fill="x", pady=(2, 0))
         add_tooltip(self.prompt_entry,
                     "Optional instruction appended to the request sent to the caption model.\n"
-                    "Leave blank to use the model's default behaviour.")
+                    "Leave blank to use the model's default behaviour.\n"
+                    "Caption presets can store a user line with each saved preset (Apply loads it here).")
 
-        ctk.CTkLabel(right, text="System prompt:",
-                     font=ctk.CTkFont(size=11)).grid(
-            row=4, column=0, columnspan=2, sticky="w", pady=(6, 0)
-        )
-        self.system_prompt_text = ctk.CTkTextbox(right, height=80, wrap="word")
-        self.system_prompt_text.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(2, 0))
+        ctk.CTkLabel(self._caption_content, text="System prompt:",
+                     font=ctk.CTkFont(size=11)).pack(anchor="w", pady=(6, 0))
+        self.system_prompt_text.pack(fill="x", pady=(2, 0))
         add_tooltip(self.system_prompt_text,
                     "System-level instruction sent to the caption model before the user prompt.\n"
                     "Changes here are saved to the current profile automatically.\n"
-                    "Applies to all backends (local, Ollama, OpenAI, Anthropic, Gemini).")
+                    "Applies to all backends (local, Ollama, OpenAI, Anthropic, Gemini).\n"
+                    "Use Caption presets above for built-in styles or your saved library.")
         # Persist to profile whenever the user stops editing
         self.system_prompt_text.bind(
             "<FocusOut>", lambda _e: self._save_system_prompt_to_profile()
@@ -638,79 +804,153 @@ class StepCaptions(ctk.CTkFrame):
 
     # ---- Tag picker helpers ----
 
+    def _reset_tag_scroll_positions(self):
+        """Scroll both tag lists to the top after a rebuild."""
+        for sf in (getattr(self, "_current_tag_frame", None),
+                   getattr(self, "_master_tag_frame", None)):
+            if sf is not None and hasattr(sf, "_parent_canvas"):
+                try:
+                    sf._parent_canvas.yview_moveto(0)
+                except Exception:
+                    pass
+
     def _rebuild_tag_list(self, item=None):
-        """Rebuild the scrollable tag list for the given (or current) item."""
-        if not hasattr(self, "_tag_list_frame"):
+        """Rebuild current-image and master tag lists for the given (or current) item."""
+        if not hasattr(self, "_current_tag_frame") or not hasattr(self, "_master_tag_frame"):
             return
+        self._build_tag_master_set()
         if item is None and self.current_index is not None:
             item = self.session.get_item(self.current_index)
-        for w in self._tag_list_frame.winfo_children():
+        if item is None and self._selected_index_caption is not None:
+            sel = self._selected_index_caption
+            if 0 <= sel < len(self.session.items):
+                item = self.session.get_item(sel)
+                self.current_index = sel
+        for w in self._current_tag_frame.winfo_children():
+            w.destroy()
+        for w in self._master_tag_frame.winfo_children():
             w.destroy()
         if item is None:
             if hasattr(self, "_tag_count_label"):
                 self._tag_count_label.configure(text="")
+            self.update_idletasks()
+            self._reset_tag_scroll_positions()
             return
         filt = self._tag_filter_var.get().lower().strip() if hasattr(self, "_tag_filter_var") else ""
-        active = list(item.tags)
-        inactive = sorted(self._tag_master_set - set(active))
-        for tag in active:
+        active_set = set(item.tags)
+        # Current image — tags on this image only (− to remove)
+        for tag in list(item.tags):
             if filt and filt not in tag.lower():
                 continue
-            self._make_tag_row(tag, active=True, item=item)
-        # Separator between active and inactive sections
-        visible_inactive = [t for t in inactive if not filt or filt in t.lower()]
-        if active and visible_inactive:
-            sep = ctk.CTkFrame(self._tag_list_frame, height=1, fg_color="gray40")
-            sep.pack(fill="x", pady=3)
-        for tag in inactive:
-            if filt and filt not in tag.lower():
-                continue
-            self._make_tag_row(tag, active=False, item=item)
+            self._make_tag_row(self._current_tag_frame, tag, active=True, item=item)
+        # Master list — show union of session tags (filter optional); cap rows for performance
+        matches = [
+            t for t in sorted(self._tag_master_set)
+            if not filt or filt in t.lower()
+        ]
+        truncated = len(matches) > MASTER_TAG_MAX_RENDER
+        show = matches[:MASTER_TAG_MAX_RENDER] if truncated else matches
+        for tag in show:
+            self._make_tag_row(
+                self._master_tag_frame, tag, active=(tag in active_set), item=item
+            )
+        if truncated:
+            ctk.CTkLabel(
+                self._master_tag_frame,
+                text=f"… {len(matches) - MASTER_TAG_MAX_RENDER} more — refine Filter",
+                text_color="gray60",
+                font=ctk.CTkFont(size=11),
+            ).pack(anchor="w", padx=4, pady=(4, 2))
         if hasattr(self, "_tag_count_label"):
-            self._tag_count_label.configure(text=f"({len(active)})")
+            self._tag_count_label.configure(text=f"({len(item.tags)})")
+        self.update_idletasks()
+        self._reset_tag_scroll_positions()
 
-    def _make_tag_row(self, tag: str, active: bool, item):
-        """Create one tag row with a +/− toggle button."""
-        row = ctk.CTkFrame(self._tag_list_frame, fg_color="transparent")
-        row.pack(fill="x", pady=1)
-        ctk.CTkLabel(row, text=tag, anchor="w",
-                     font=ctk.CTkFont(size=11)).pack(side="left", fill="x",
-                                                     expand=True, padx=(2, 0))
+    def _make_tag_row(self, frame, tag: str, active: bool, item):
+        """One compact row: tag text then +/- (no extra frames/lines — avoids scroll-canvas glitches)."""
+        row = ctk.CTkFrame(frame, fg_color=("gray88", "gray25"), corner_radius=2)
+        row.pack(fill="x", pady=1, padx=1)
+
         def toggle(t=tag, a=active):
             if a:
                 if t in item.tags:
                     item.tags.remove(t)
+                if t in item.tags_from_scan:
+                    item.tags_from_scan.remove(t)
             else:
                 if t not in item.tags:
                     item.tags.append(t)
             self._rebuild_tag_list(item)
             if self.on_changed:
                 self.on_changed()
+
+        ctk.CTkLabel(
+            row, text=tag, anchor="w",
+            text_color=("gray10", "gray90"),
+            font=ctk.CTkFont(size=11),
+        ).pack(side="left", padx=(6, 4), pady=2)
         ctk.CTkButton(
             row,
-            text="−" if active else "+",
-            width=26, height=20,
+            text="-" if active else "+",
+            width=28, height=22,
             fg_color="darkred" if active else "#1f538d",
             command=toggle,
-        ).pack(side="right", padx=(4, 2))
+        ).pack(side="left", padx=(0, 4), pady=2)
+
+    def _update_panel_pack_weights(self):
+        """Give horizontal space to expanded panels only."""
+        t_open = self._tags_panel_open
+        c_open = self._caption_panel_open
+        if t_open and c_open:
+            self._tags_panel.pack_configure(fill="both", expand=True)
+            self._caption_panel.pack_configure(fill="both", expand=True)
+        elif t_open and not c_open:
+            self._tags_panel.pack_configure(fill="both", expand=True)
+            self._caption_panel.pack_configure(fill="y", expand=False)
+        elif not t_open and c_open:
+            self._tags_panel.pack_configure(fill="y", expand=False)
+            self._caption_panel.pack_configure(fill="both", expand=True)
+        else:
+            self._tags_panel.pack_configure(fill="y", expand=False)
+            self._caption_panel.pack_configure(fill="y", expand=False)
+
+    def _toggle_tags_panel(self):
+        self._tags_panel_open = not self._tags_panel_open
+        if self._tags_panel_open:
+            self._tags_content.pack(fill="both", expand=True)
+            self._tags_toggle_btn.configure(text="◀")
+        else:
+            self._tags_content.pack_forget()
+            self._tags_toggle_btn.configure(text="▶")
+        self._update_panel_pack_weights()
+
+    def _toggle_caption_panel(self):
+        self._caption_panel_open = not self._caption_panel_open
+        if self._caption_panel_open:
+            self._caption_content.pack(fill="both", expand=True)
+            self._caption_toggle_btn.configure(text="◀")
+        else:
+            self._caption_content.pack_forget()
+            self._caption_toggle_btn.configure(text="▶")
+        self._update_panel_pack_weights()
 
     def _add_manual_tag(self):
-        """Add a manually typed tag to the current image and master set."""
+        """Add a manually typed tag to the current image (not treated as WD14 scan)."""
         tag = self._new_tag_entry.get().strip()
         if not tag or self.current_index is None:
             return
         item = self.session.get_item(self.current_index)
         if item and tag not in item.tags:
             item.tags.append(tag)
-            self._tag_master_set.add(tag)
         self._new_tag_entry.delete(0, "end")
         self._rebuild_tag_list(item)
 
     def _build_tag_master_set(self):
-        """Rebuild master tag set from the union of all current session items' tags."""
+        """Rebuild master tag pool from session items (scanned-only vs full union)."""
         self._tag_master_set = set()
+        use_full = getattr(self, "_master_tag_pool_use_full", False)
         for it in self.session.items:
-            self._tag_master_set.update(it.tags)
+            self._tag_master_set.update(it.tags if use_full else it.tags_from_scan)
 
     # ---- Export ----
 
@@ -758,6 +998,9 @@ class StepCaptions(ctk.CTkFrame):
         self.system_prompt_text.delete("1.0", "end")
         if value:
             self.system_prompt_text.insert("1.0", value)
+        refresh = getattr(self, "_refresh_caption_preset_menu", None)
+        if callable(refresh):
+            refresh()
 
     def _save_system_prompt_to_profile(self):
         """Write the current textbox value back to the active profile."""
@@ -809,13 +1052,32 @@ class StepCaptions(ctk.CTkFrame):
         self._btn_batch_caption.configure(state="disabled" if busy else "normal")
         self._btn_save_edits.configure(state="disabled" if busy else "normal")
         if busy:
-            # Re-insert Stop after the Batch caption button in row2
             self._btn_stop_caption.pack(
-                in_=self._toolbar_row2, side="left", padx=(0, 5),
-                after=self._btn_batch_caption,
+                in_=self._toolbar_general, side="left", padx=(0, 5),
+                after=self._btn_save_edits,
             )
         else:
             self._btn_stop_caption.pack_forget()
+
+    def _poll_batch_ui_queue(self):
+        """Apply latest loading message from worker (main thread only)."""
+        if not self._batch_ui_polling:
+            return
+        last_msg = None
+        try:
+            while True:
+                try:
+                    msg = self._batch_ui_queue.get_nowait()
+                except queue.Empty:
+                    break
+                if isinstance(msg, tuple) and len(msg) >= 2 and msg[0] == "loading":
+                    last_msg = msg[1]
+        except Exception:
+            pass
+        if last_msg is not None:
+            self._set_loading(last_msg, True)
+        if self._batch_ui_polling:
+            self.after(50, self._poll_batch_ui_queue)
 
     def _stop_captioning_batch(self):
         """Signal the running batch caption or tag loop to stop after the current image."""
@@ -960,7 +1222,7 @@ class StepCaptions(ctk.CTkFrame):
             if tags is None:
                 return
             item.tags = tags
-            self._tag_master_set.update(tags)
+            item.tags_from_scan = list(tags)
             self._rebuild_tag_list(item)
             if self.on_changed:
                 self.on_changed()
@@ -968,10 +1230,15 @@ class StepCaptions(ctk.CTkFrame):
         def run():
             try:
                 result = work()
-                self.after(0, lambda: on_done(result))
+                _schedule_main(lambda: on_done(result))
             except Exception as e:
-                self.after(0, lambda: self._set_loading("", False))
-                self.after(0, lambda: messagebox.showerror("Tags", str(e)))
+                err = str(e)
+
+                def _err():
+                    self._set_loading("", False)
+                    messagebox.showerror("Tags", err)
+
+                _schedule_main(_err)
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -1006,10 +1273,15 @@ class StepCaptions(ctk.CTkFrame):
         def run():
             try:
                 result = work()
-                self.after(0, lambda: on_done(result))
+                _schedule_main(lambda: on_done(result))
             except Exception as e:
-                self.after(0, lambda: self._set_loading("", False))
-                self.after(0, lambda: messagebox.showerror("Caption", str(e)))
+                err = str(e)
+
+                def _err():
+                    self._set_loading("", False)
+                    messagebox.showerror("Caption", err)
+
+                _schedule_main(_err)
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -1028,7 +1300,9 @@ class StepCaptions(ctk.CTkFrame):
         self._btn_stop_caption.configure(state="normal", text="Stop")
         items_snapshot = list(self.session.items)
         total = len(items_snapshot)
+        self._batch_ui_polling = True
         self._set_loading("Batch tagging…", True)
+        self.after(50, self._poll_batch_ui_queue)
 
         def work():
             from ui.app_main import set_progress, set_status
@@ -1039,11 +1313,12 @@ class StepCaptions(ctk.CTkFrame):
                 if not item.original_path.exists():
                     skipped += 1
                     continue
-                self.after(0, lambda i=i: self._set_loading(f"Tagging {i}/{total}…", True))
+                self._batch_ui_queue.put(("loading", f"Tagging {i}/{total}…"))
                 set_progress(i, total, f"Tagging {i}/{total}: {item.original_path.name}")
                 result = tag_image(item.original_path, threshold=th)
                 if result:
                     item.tags = result
+                    item.tags_from_scan = list(result)
                     tagged += 1
                 else:
                     skipped += 1
@@ -1051,9 +1326,13 @@ class StepCaptions(ctk.CTkFrame):
             return tagged, skipped, self._tags_stop_event.is_set()
 
         def on_done(tagged, skipped, stopped):
+            self._batch_ui_polling = False
+            try:
+                while True:
+                    self._batch_ui_queue.get_nowait()
+            except queue.Empty:
+                pass
             self._set_loading("", False)
-            self._build_tag_master_set()
-            self._rebuild_tag_list()
             if self.on_changed:
                 self.on_changed()
             self._refresh_list()
@@ -1067,10 +1346,21 @@ class StepCaptions(ctk.CTkFrame):
         def run():
             try:
                 result = work()
-                self.after(0, lambda: on_done(*result))
+                _schedule_main(lambda r=result: on_done(*r))
             except Exception as e:
-                self.after(0, lambda: self._set_loading("", False))
-                self.after(0, lambda: messagebox.showerror("Batch tags", str(e)))
+                err = str(e)
+
+                def _err():
+                    self._batch_ui_polling = False
+                    try:
+                        while True:
+                            self._batch_ui_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                    self._set_loading("", False)
+                    messagebox.showerror("Batch tags", err)
+
+                _schedule_main(_err)
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -1121,7 +1411,9 @@ class StepCaptions(ctk.CTkFrame):
         self._caption_stop_event.clear()
         self._tags_stop_event.clear()
         self._btn_stop_caption.configure(state="normal", text="Stop")
+        self._batch_ui_polling = True
         self._set_loading("Batch captioning…", True)
+        self.after(50, self._poll_batch_ui_queue)
 
         total = len(items_snapshot)
 
@@ -1135,33 +1427,45 @@ class StepCaptions(ctk.CTkFrame):
                     break
                 if not item.original_path.exists():
                     continue
-                self.after(0, lambda i=i, f=failed: self._set_loading(
-                    f"Captioning {i}/{total}…" + (f"  ({f} failed)" if f else ""), True))
                 set_progress(i, total, f"Captioning {i}/{total}: {item.original_path.name}")
                 if not item.tags:
-                    item.tags = tag_image(item.original_path, threshold=th)
+                    scanned = tag_image(item.original_path, threshold=th)
+                    item.tags = list(scanned)
+                    item.tags_from_scan = list(scanned)
                 caption = generate_caption(item.original_path, list(item.tags), prompt,
                                            system_prompt_override=sys_prompt or None)
                 if not caption:
                     failed += 1
-                    # Update the label immediately so the user sees failures in real time
-                    self.after(0, lambda i=i, f=failed: self._set_loading(
-                        f"Captioning {i}/{total}… ({f} failed — check Settings → Caption source)", True))
                 else:
                     item.caption = caption
                 done += 1
+                fail_hint = (
+                    f" ({failed} failed — check Settings → Caption source)"
+                    if failed else ""
+                )
+                self._batch_ui_queue.put(("loading", f"Captioning {i}/{total}…{fail_hint}"))
             set_status("Ready")
             return done, failed, self._caption_stop_event.is_set()
 
         def on_done(done, failed, stopped):
+            self._batch_ui_polling = False
+            try:
+                while True:
+                    self._batch_ui_queue.get_nowait()
+            except queue.Empty:
+                pass
             self._set_loading("", False)
-            self._build_tag_master_set()
-            self._rebuild_tag_list()
-            if self.current_index is not None:
-                item = self.session.get_item(self.current_index)
-                if item:
+            idx = self.current_index
+            if idx is None and self._selected_index_caption is not None:
+                sel = self._selected_index_caption
+                if 0 <= sel < len(self.session.items):
+                    idx = sel
+                    self.current_index = sel
+            if idx is not None:
+                cap_item = self.session.get_item(idx)
+                if cap_item:
                     self.caption_text.delete("1.0", "end")
-                    self.caption_text.insert("1.0", item.caption)
+                    self.caption_text.insert("1.0", cap_item.caption)
             if self.on_changed:
                 self.on_changed()
             self._refresh_list()
@@ -1174,10 +1478,21 @@ class StepCaptions(ctk.CTkFrame):
         def run():
             try:
                 result = work()
-                self.after(0, lambda: on_done(*result))
+                _schedule_main(lambda r=result: on_done(*r))
             except Exception as e:
-                self.after(0, lambda: self._set_loading("", False))
-                self.after(0, lambda: messagebox.showerror("Batch caption", str(e)))
+                err = str(e)
+
+                def _err():
+                    self._batch_ui_polling = False
+                    try:
+                        while True:
+                            self._batch_ui_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                    self._set_loading("", False)
+                    messagebox.showerror("Batch caption", err)
+
+                _schedule_main(_err)
 
         threading.Thread(target=run, daemon=True).start()
 

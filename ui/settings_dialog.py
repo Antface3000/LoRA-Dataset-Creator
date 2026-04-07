@@ -9,6 +9,7 @@ from tkinter import messagebox
 
 from core.data.profiles import get_profiles_manager
 from core.config import CAPTION_SYSTEM_PROMPT
+from ui.caption_prompt_presets_ui import build_preset_row
 from ui.tooltip import add_tooltip
 
 _SOURCE_LABELS = ["local", "ollama", "openai", "anthropic", "gemini"]
@@ -149,14 +150,58 @@ def open_settings_dialog(parent, on_applied_callback=None):
         fr_text.insert("1.0", "\n".join(f"{a}|{b}" for a, b in default_fr))
     row += 1
 
+    system_prompt_text = ctk.CTkTextbox(cap, height=110, width=280, wrap="word")
+    current_prompt = profile.get("caption_system_prompt") or CAPTION_SYSTEM_PROMPT
+    system_prompt_text.insert("1.0", current_prompt)
+
+    user_preset_entry = ctk.CTkEntry(
+        cap, width=280, placeholder_text="e.g. Focus on composition (optional)"
+    )
+
+    preset_host = ctk.CTkFrame(cap, fg_color="transparent")
+
+    def _settings_save_system_to_profile() -> None:
+        profiles.set_caption_system_prompt(system_prompt_text.get("1.0", "end-1c").strip())
+
+    def _settings_set_system(s: str) -> None:
+        system_prompt_text.delete("1.0", "end")
+        system_prompt_text.insert("1.0", s)
+
+    def _settings_set_user(s: str) -> None:
+        user_preset_entry.delete(0, "end")
+        if s:
+            user_preset_entry.insert(0, s)
+
+    build_preset_row(
+        preset_host,
+        set_system_text=_settings_set_system,
+        set_user_text=_settings_set_user,
+        save_system_to_profile=_settings_save_system_to_profile,
+        get_system_text=lambda: system_prompt_text.get("1.0", "end-1c"),
+        get_user_text=lambda: user_preset_entry.get(),
+    )
+    preset_host.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(8, 4))
+    row += 1
+
+    ctk.CTkLabel(cap, text="Optional user prompt:", wraplength=160, justify="left").grid(
+        row=row, column=0, sticky="w", padx=(0, 10), pady=(3, 3))
+    user_preset_entry.grid(row=row, column=1, sticky="ew", pady=(3, 3))
+    add_tooltip(
+        user_preset_entry,
+        "Optional line saved with caption presets (Apply / Save current…). "
+        "Step 3 has its own user prompt field for generation—copy over if you want the same text there.",
+    )
+    row += 1
+
     # System prompt
     ctk.CTkLabel(cap, text="Caption system prompt:", wraplength=160, justify="left").grid(
         row=row, column=0, sticky="nw", padx=(0, 10), pady=(8, 3))
-    system_prompt_text = ctk.CTkTextbox(cap, height=110, width=280, wrap="word")
     system_prompt_text.grid(row=row, column=1, sticky="ew", pady=(8, 3))
-    add_tooltip(system_prompt_text, "System prompt sent to the LLM during caption generation for this profile.")
-    current_prompt = profile.get("caption_system_prompt") or CAPTION_SYSTEM_PROMPT
-    system_prompt_text.insert("1.0", current_prompt)
+    add_tooltip(
+        system_prompt_text,
+        "System prompt sent to the LLM during caption generation for this profile. "
+        "Caption presets (above) can load built-in or saved styles; built-in “General descriptive” is suited to non-training use.",
+    )
     row += 1
 
     # ── Smart Detection ───────────────────────────────────────────

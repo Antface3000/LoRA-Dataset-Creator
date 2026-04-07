@@ -29,6 +29,8 @@ class SessionItem:
     """One image in the session: path, optional crop, tags, caption, output name."""
     original_path: Path
     tags: List[str] = field(default_factory=list)
+    # Last WD14 tag_image result for this item (manual edits only change `tags`).
+    tags_from_scan: List[str] = field(default_factory=list)
     caption: str = ""
     output_stem: Optional[str] = None  # None = use original_path.stem (or with bucket prefix)
     # Optional crop: (x1, y1, x2, y2) in image coords, and bucket for resize
@@ -141,6 +143,7 @@ class Session:
         item = self._items[index]
         if tags is not None:
             item.tags = list(tags)
+            item.tags_from_scan = []
         if caption is not None:
             item.caption = caption
         if crop_box is not None:

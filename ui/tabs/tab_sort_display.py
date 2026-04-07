@@ -38,21 +38,48 @@ def create_crop_overlay(
     crop_x2_d = crop_x2 * scale
     crop_y2_d = crop_y2 * scale
     
-    # Darken outside crop
-    dark = Image.new('RGBA', overlay.size, (0, 0, 0, 128))
-    overlay = Image.alpha_composite(overlay, dark)
+    # Darken only the four strips OUTSIDE the crop box.
+    # Build a fully-transparent layer, paint the outside regions dark, then
+    # composite it — the crop area stays at full brightness.
+    mask = Image.new('RGBA', overlay.size, (0, 0, 0, 0))
+    mask_draw = ImageDraw.Draw(mask)
+    shadow = (0, 0, 0, 140)
+    w, h = overlay.size
+    # top strip
+    if crop_y1_d > 0:
+        mask_draw.rectangle([0, 0, w, crop_y1_d], fill=shadow)
+    # bottom strip
+    if crop_y2_d < h:
+        mask_draw.rectangle([0, crop_y2_d, w, h], fill=shadow)
+    # left strip (middle band)
+    if crop_x1_d > 0:
+        mask_draw.rectangle([0, crop_y1_d, crop_x1_d, crop_y2_d], fill=shadow)
+    # right strip (middle band)
+    if crop_x2_d < w:
+        mask_draw.rectangle([crop_x2_d, crop_y1_d, w, crop_y2_d], fill=shadow)
+    overlay = Image.alpha_composite(overlay, mask)
     draw = ImageDraw.Draw(overlay)
-    
-    # Draw crop rectangle
+
+    # Draw crop rectangle border
     draw.rectangle([crop_x1_d, crop_y1_d, crop_x2_d, crop_y2_d], outline="yellow", width=3)
     
-    # Draw corner and edge handles (small squares)
+    # Draw corner and edge handles (small squares).
+    # Clamp each handle centre so it is never closer than handle_r pixels to
+    # the image boundary — this prevents handles from being half-clipped when
+    # the crop box is flush with the top, bottom, left, or right edge.
     handle_r = 6
+    ow, oh = overlay.size
+
+    def _ch(cx, cy):
+        """Clamp handle centre to stay fully inside the image."""
+        return max(handle_r, min(ow - handle_r, cx)), max(handle_r, min(oh - handle_r, cy))
+
     corners = [
         (crop_x1_d, crop_y1_d), (crop_x2_d, crop_y1_d),
         (crop_x1_d, crop_y2_d), (crop_x2_d, crop_y2_d)
     ]
-    for cx, cy in corners:
+    for raw_cx, raw_cy in corners:
+        cx, cy = _ch(raw_cx, raw_cy)
         draw.rectangle(
             [cx - handle_r, cy - handle_r, cx + handle_r, cy + handle_r],
             outline="white", fill="yellow", width=2
@@ -61,7 +88,8 @@ def create_crop_overlay(
     mid_s = ((crop_x1_d + crop_x2_d) / 2, crop_y2_d)
     mid_w = (crop_x1_d, (crop_y1_d + crop_y2_d) / 2)
     mid_e = (crop_x2_d, (crop_y1_d + crop_y2_d) / 2)
-    for cx, cy in [mid_n, mid_s, mid_w, mid_e]:
+    for raw_cx, raw_cy in [mid_n, mid_s, mid_w, mid_e]:
+        cx, cy = _ch(raw_cx, raw_cy)
         draw.rectangle(
             [cx - handle_r, cy - handle_r, cx + handle_r, cy + handle_r],
             outline="white", fill="yellow", width=2

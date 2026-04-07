@@ -5,9 +5,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased] — 2026-04-05
+## [Unreleased] — 2026-04-07
+
+### Added
+
+- **Caption prompt presets** — Wizard Step 3 and **Settings → Caption** include a preset
+  row: built-in system prompts (*General descriptive*, *LoRA / full tag fidelity*, *Short /
+  one sentence*), **Apply**, **Save current…** (names a preset), and **Delete saved**.
+  User presets are stored in `flux_prep_config.json` under `caption_prompt_library`
+  (`name`, `system`, `user`). New modules: `core/data/caption_prompt_presets.py`,
+  `ui/caption_prompt_presets_ui.py`.
+
+- **Session tag pool mode (Step 3)** — The lower tag list is labeled **Session tag pool**
+  with a menu: **Scanned tags (WD14)** (default) shows the union of WD14 results only;
+  **All session tags** includes manual tags too. Each `SessionItem` has
+  `tags_from_scan` updated by WD14; manual adds use `tags` only. Preference is saved per
+  profile as `master_tag_list_mode`.
 
 ### Changed
+
+- **Wizard Step 3 toolbar** — One **general** bar under the hint (image index, Load, tag
+  threshold, Stop when busy, Save edits, status, Output, trigger words, Export). **Generate
+  tags** / **Batch tags** sit above the Tags column; **Generate caption** / **Batch
+  caption** above the Caption column.
+
+- **Master tag list filter** — The session pool lists up to the existing render cap
+  without requiring a minimum filter length (removed the old “type N characters” gate).
+
+- **Local caption pipeline** — Vision-stage user text is built from WD14 tags; Llama
+  finalization respects the Step 3 / profile system prompt via
+  `_resolve_local_caption_system`. `_clean_caption` strips more model junk (encoding
+  lines, empty `USER:`/`ASSISTANT:` markers, `__media__` echoes) and leading role prefixes.
+
+- **Crop & Sort overlay** — Outside-crop dimming is drawn only in the four regions
+  outside the crop rectangle so the crop interior stays full brightness. Resize handles
+  are clamped so they are not half-clipped when the crop is flush with the image edge.
 
 - **Google Gemini backend migrated to `google-genai`** — The `google-generativeai`
   package is deprecated and no longer compatible with the Gemini API. The backend now
@@ -36,6 +68,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   header is now only shown when the Wizard tab is active.
 
 ### Fixed
+
+- **Session tag pool menu stuck or profile wiped** — Changing the pool mode no longer
+  builds the save payload from `load_profile(...) or {}` (which could replace the whole
+  profile if missing). Saves always shallow-copy `get_current_profile()`. Pool mode is
+  tracked explicitly and the `CTkOptionMenu` is updated with `.set()` so the widget stays
+  in sync with the profile after reloads.
 
 - **TypeError when switching tabs** — `CTkTabview`'s command callback passes no
   arguments, but `_on_tab_changed` expected a `tab_name` parameter. Fixed by

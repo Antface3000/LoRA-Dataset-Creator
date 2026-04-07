@@ -66,7 +66,9 @@ OLLAMA_BASE_DIR = Path(os.path.expanduser("~")) / ".ollama" / "models"
 # You can set a custom path here if Ollama is installed elsewhere
 GEMMA3_OLLAMA_PATH = None  # Set to Path("C:/path/to/ollama/models/gemma3") if needed
 
-# Caption VLM system prompt (GGUF LLaVA / JoyCaption). Empty string = use model default.
+# Default / fallback caption system text when the profile has no caption system prompt, or for
+# GGUF vision chat if the resolved prompt is empty. The UI (Step 3 / Settings) profile field
+# normally overrides this for local two-stage captioning (vision + Llama).
 # Tags are the source of truth; describe using the same specificity—no euphemisms or omissions.
 CAPTION_SYSTEM_PROMPT = (
     "You are an image captioning expert for LoRA training data. "

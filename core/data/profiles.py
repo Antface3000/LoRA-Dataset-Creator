@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Dict, Optional, List
 
+from core.data.caption_prompt_presets import normalize_library_item, unique_saved_name
 from core.config import (
     BUCKET_PORTRAIT, BUCKET_SQUARE, BUCKET_LANDSCAPE,
     MIN_LAPLACIAN_VARIANCE, MIN_AESTHETIC_SCORE,
@@ -43,6 +44,10 @@ class ProfilesManager:
         if not self.config.get("current_profile"):
             self.config["current_profile"] = "User settings"
             self._save_config()
+        if "caption_prompt_library" not in self.config:
+            self.config["caption_prompt_library"] = []
+        elif not isinstance(self.config["caption_prompt_library"], list):
+            self.config["caption_prompt_library"] = []
     
     def _default_config(self) -> Dict:
         """Get default configuration structure."""
@@ -80,13 +85,15 @@ class ProfilesManager:
                     "default_output_format": "Natural language",
                     "enable_nudenet": False,
                     "color_theme": "blue",
-                    "min_crop_px": 512
+                    "min_crop_px": 512,
+                    "master_tag_list_mode": "scanned",
                 }
             },
             "current_profile": "User settings",
             "source_folder": "",
             "output_folder": "",
-            "processed_folder": ""
+            "processed_folder": "",
+            "caption_prompt_library": [],
         }
     
     def _save_config(self) -> None:
@@ -201,6 +208,41 @@ class ProfilesManager:
         profile = self.load_profile(name) or self._default_config()["profiles"]["User settings"]
         profile["caption_system_prompt"] = prompt or ""
         self.save_profile(name, profile)
+
+    def get_caption_prompt_library(self) -> List[Dict[str, str]]:
+        """Return user-saved caption presets (name, system, user)."""
+        raw = self.config.get("caption_prompt_library", [])
+        if not isinstance(raw, list):
+            return []
+        out: List[Dict[str, str]] = []
+        for x in raw:
+            n = normalize_library_item(x)
+            if n:
+                out.append(n)
+        return out
+
+    def set_caption_prompt_library(self, items: List[Dict[str, str]]) -> None:
+        """Replace the entire saved caption preset list."""
+        self.config["caption_prompt_library"] = list(items)
+        self._save_config()
+
+    def add_caption_prompt_library_entry(self, name: str, system: str, user: str) -> str:
+        """Append a saved preset; returns the final name (deduped if needed)."""
+        lib = self.get_caption_prompt_library()
+        base = (name or "").strip() or "Untitled"
+        final = unique_saved_name(lib, base)
+        lib.append({"name": final, "system": system or "", "user": user or ""})
+        self.set_caption_prompt_library(lib)
+        return final
+
+    def remove_caption_prompt_library_entry(self, name: str) -> bool:
+        """Remove a saved preset by exact name. Returns True if something was removed."""
+        lib = self.get_caption_prompt_library()
+        new = [x for x in lib if x["name"] != name]
+        if len(new) == len(lib):
+            return False
+        self.set_caption_prompt_library(new)
+        return True
 
     # Caption backend helpers
 
