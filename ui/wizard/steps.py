@@ -50,27 +50,48 @@ def _schedule_main(callback):
         app.root.after(0, callback)
 
 
-def _make_zoom_pan_canvas(parent, width: int = 320, height: int = 320) -> tk.Canvas:
+def _make_zoom_pan_canvas(
+    parent,
+    width: int = 320,
+    height: int = 320,
+    *,
+    max_preview_side: int = 2048,
+    max_photo_side: int = 2560,
+) -> tk.Canvas:
     """Return a tk.Canvas with mouse-wheel zoom and click-drag pan built in.
 
+    Images are downsampled to at most ``max_preview_side`` on the long edge when
+    loaded, and zoom is capped so the PhotoImage never exceeds ``max_photo_side``
+    (keeps the UI thread responsive for large sources).
+
     Usage:
-        canvas = _make_zoom_pan_canvas(parent, 400, 400)
+        canvas = _make_zoom_pan_canvas(parent, 400, 400, max_preview_side=2048, max_photo_side=2560)
         canvas.load_image(pil_image)   # resets zoom/pan and draws the image
     """
     canvas = tk.Canvas(parent, width=width, height=height,
                        bg="#1a1a1a", highlightthickness=0, cursor="fleur")
-    canvas._img_full = None      # PIL Image (full resolution)
+    canvas._img_full = None      # PIL Image (preview resolution, not original file)
     canvas._photo = None         # ImageTk.PhotoImage kept alive
     canvas._zoom = 1.0
+    canvas._max_zoom = 10.0
     canvas._pan = [0, 0]
     canvas._drag_start = [0, 0]
+    canvas._max_photo_side = max_photo_side
 
     def _redraw():
         if canvas._img_full is None:
             return
         w = max(1, int(canvas._img_full.width * canvas._zoom))
         h = max(1, int(canvas._img_full.height * canvas._zoom))
-        resized = canvas._img_full.resize((w, h), Image.Resampling.LANCZOS)
+        cap = max(1, canvas._max_photo_side)
+        if max(w, h) > cap:
+            s = cap / max(w, h)
+            w = max(1, int(w * s))
+            h = max(1, int(h * s))
+        resample = (
+            Image.Resampling.BILINEAR if max(w, h) >= 1024 else Image.Resampling.LANCZOS
+        )
+        resized = canvas._img_full.resize((w, h), resample)
         canvas._photo = ImageTk.PhotoImage(resized)
         canvas.delete("all")
         canvas.create_image(canvas._pan[0], canvas._pan[1],
@@ -78,7 +99,7 @@ def _make_zoom_pan_canvas(parent, width: int = 320, height: int = 320) -> tk.Can
 
     def _on_zoom(event):
         delta = 1.1 if (event.delta > 0 or getattr(event, "num", 0) == 4) else 1 / 1.1
-        canvas._zoom = max(0.1, min(10.0, canvas._zoom * delta))
+        canvas._zoom = max(0.1, min(canvas._max_zoom, canvas._zoom * delta))
         _redraw()
 
     def _on_press(event):
@@ -97,9 +118,19 @@ def _make_zoom_pan_canvas(parent, width: int = 320, height: int = 320) -> tk.Can
     canvas.bind("<B1-Motion>", _on_drag)
 
     def load_image(pil_image: Image.Image) -> None:
-        canvas._img_full = pil_image.convert("RGB")
+        im = pil_image.convert("RGB")
+        mw, mh = im.size
+        m = max(mw, mh)
+        cap_load = max(1, max_preview_side)
+        if m > cap_load:
+            s = cap_load / m
+            nw, nh = max(1, int(mw * s)), max(1, int(mh * s))
+            im = im.resize((nw, nh), Image.Resampling.LANCZOS)
+        canvas._img_full = im
         canvas._zoom = 1.0
         canvas._pan = [0, 0]
+        lim = max(im.width, im.height, 1)
+        canvas._max_zoom = min(10.0, max(0.1, canvas._max_photo_side / lim))
         _redraw()
 
     def clear_image(placeholder: str = "") -> None:
@@ -252,7 +283,9 @@ class StepImages(ctk.CTkFrame):
         right.grid_rowconfigure(1, weight=1)
         ctk.CTkLabel(right, text="Preview  (scroll to zoom · drag to pan)",
                      font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, sticky="w", pady=(0, 5))
-        self._preview_canvas = _make_zoom_pan_canvas(right, width=400, height=400)
+        self._preview_canvas = _make_zoom_pan_canvas(
+            right, width=400, height=400, max_preview_side=2048, max_photo_side=2560
+        )
         self._preview_canvas.grid(row=1, column=0, sticky="nsew")
         self._preview_canvas.clear_image("Click an image to preview.")
         btn_row = ctk.CTkFrame(right, fg_color="transparent")
@@ -428,7 +461,9 @@ class StepImages(ctk.CTkFrame):
         win.resizable(True, True)
         f = ctk.CTkFrame(win, fg_color="transparent")
         f.pack(fill="both", expand=True, padx=6, pady=(6, 0))
-        canvas = _make_zoom_pan_canvas(f, width=cw, height=ch)
+        canvas = _make_zoom_pan_canvas(
+            f, width=cw, height=ch, max_preview_side=4096, max_photo_side=8192
+        )
         canvas.pack(fill="both", expand=True)
         canvas.load_image(image)
         info = ctk.CTkLabel(win, text=f"#{idx + 1} — {item.original_path.name}  |  {image.width}×{image.height}px",
@@ -486,6 +521,11 @@ class StepCaptions(ctk.CTkFrame):
             self._load_system_prompt_from_profile()
         if hasattr(self, "_master_tag_list_mode_var"):
             self._apply_master_tag_list_mode_from_profile_dict(profile)
+        if hasattr(self, "_master_tag_pool_not_on_image_var"):
+            self._master_tag_pool_not_on_image_var.set(
+                bool(profile.get("master_tag_pool_not_on_image_only", False))
+            )
+            self._rebuild_tag_list()
 
     def _apply_master_tag_list_mode_from_profile_dict(self, profile: dict) -> None:
         key = _normalize_master_tag_list_mode_key(profile.get("master_tag_list_mode"))
@@ -515,6 +555,16 @@ class StepCaptions(ctk.CTkFrame):
         )
         pm.save_profile(name, prof)
         self._build_tag_master_set()
+        self._rebuild_tag_list()
+
+    def _on_master_tag_pool_filter_toggled(self) -> None:
+        pm = get_profiles_manager()
+        name = pm.config.get("current_profile", "User settings")
+        prof = dict(pm.get_current_profile())
+        prof["master_tag_pool_not_on_image_only"] = bool(
+            self._master_tag_pool_not_on_image_var.get()
+        )
+        pm.save_profile(name, prof)
         self._rebuild_tag_list()
 
     def _build_ui(self):
@@ -609,7 +659,9 @@ class StepCaptions(ctk.CTkFrame):
         preview_frame.grid(row=2, column=0, sticky="nsew")
         ctk.CTkLabel(preview_frame, text="Preview  (scroll·drag)",
                      font=ctk.CTkFont(weight="bold")).pack(anchor="w", pady=(0, 2))
-        self._preview_canvas = _make_zoom_pan_canvas(preview_frame, width=240, height=240)
+        self._preview_canvas = _make_zoom_pan_canvas(
+            preview_frame, width=240, height=240, max_preview_side=1600, max_photo_side=2048
+        )
         self._preview_canvas.pack(fill="both", expand=True, pady=3)
         self._preview_canvas.clear_image("Select an image to preview.")
         btn_row3 = ctk.CTkFrame(preview_frame, fg_color="transparent")
@@ -713,6 +765,23 @@ class StepCaptions(ctk.CTkFrame):
             "All session: union of every tag on every image, including manual adds.",
         )
 
+        _pool_filter = bool(
+            get_profiles_manager().get_current_profile().get("master_tag_pool_not_on_image_only", False)
+        )
+        self._master_tag_pool_not_on_image_var = tk.BooleanVar(value=_pool_filter)
+        _pool_filter_cb = ctk.CTkCheckBox(
+            master_hdr,
+            text="Not on this image only",
+            variable=self._master_tag_pool_not_on_image_var,
+            command=self._on_master_tag_pool_filter_toggled,
+            font=ctk.CTkFont(size=11),
+        )
+        _pool_filter_cb.grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        add_tooltip(
+            _pool_filter_cb,
+            "When checked, the pool list shows only tags not yet on the current image (easy to find ones to add).",
+        )
+
         self._master_tag_frame = ctk.CTkScrollableFrame(self._tags_content, height=100)
         self._master_tag_frame.grid(row=4, column=0, sticky="nsew")
 
@@ -814,11 +883,12 @@ class StepCaptions(ctk.CTkFrame):
                 except Exception:
                     pass
 
-    def _rebuild_tag_list(self, item=None):
-        """Rebuild current-image and master tag lists for the given (or current) item."""
-        if not hasattr(self, "_current_tag_frame") or not hasattr(self, "_master_tag_frame"):
-            return
-        self._build_tag_master_set()
+    def _tag_filter_lower(self) -> str:
+        if not hasattr(self, "_tag_filter_var"):
+            return ""
+        return self._tag_filter_var.get().lower().strip()
+
+    def _resolve_tag_list_item(self, item=None):
         if item is None and self.current_index is not None:
             item = self.session.get_item(self.current_index)
         if item is None and self._selected_index_caption is not None:
@@ -826,34 +896,60 @@ class StepCaptions(ctk.CTkFrame):
             if 0 <= sel < len(self.session.items):
                 item = self.session.get_item(sel)
                 self.current_index = sel
+        return item
+
+    def _clear_current_tag_rows(self) -> None:
         for w in self._current_tag_frame.winfo_children():
             w.destroy()
+
+    def _clear_master_tag_rows(self) -> None:
         for w in self._master_tag_frame.winfo_children():
             w.destroy()
-        if item is None:
-            if hasattr(self, "_tag_count_label"):
-                self._tag_count_label.configure(text="")
-            self.update_idletasks()
-            self._reset_tag_scroll_positions()
+
+    def _update_tag_count_label(self, item) -> None:
+        if not hasattr(self, "_tag_count_label"):
             return
-        filt = self._tag_filter_var.get().lower().strip() if hasattr(self, "_tag_filter_var") else ""
-        active_set = set(item.tags)
-        # Current image — tags on this image only (− to remove)
+        if item is None:
+            self._tag_count_label.configure(text="")
+        else:
+            self._tag_count_label.configure(text=f"({len(item.tags)})")
+
+    def _fill_current_tag_rows(self, item) -> None:
+        filt = self._tag_filter_lower()
         for tag in list(item.tags):
             if filt and filt not in tag.lower():
                 continue
             self._make_tag_row(self._current_tag_frame, tag, active=True, item=item)
-        # Master list — show union of session tags (filter optional); cap rows for performance
+
+    def _fill_master_tag_rows(self, item) -> None:
+        filt = self._tag_filter_lower()
+        active_set = set(item.tags)
         matches = [
             t for t in sorted(self._tag_master_set)
             if not filt or filt in t.lower()
         ]
+        _pool_not_on = getattr(self, "_master_tag_pool_not_on_image_var", None)
+        if _pool_not_on is not None and _pool_not_on.get():
+            matches = [t for t in matches if t not in active_set]
         truncated = len(matches) > MASTER_TAG_MAX_RENDER
         show = matches[:MASTER_TAG_MAX_RENDER] if truncated else matches
         for tag in show:
             self._make_tag_row(
-                self._master_tag_frame, tag, active=(tag in active_set), item=item
+                self._master_tag_frame, tag, active=(tag in active_set), item=item, pool_row=True
             )
+        if (
+            self._master_tag_pool_not_on_image_var.get()
+            and not show
+            and self._tag_master_set
+        ):
+            ctk.CTkLabel(
+                self._master_tag_frame,
+                text="All pool tags are already on this image.",
+                text_color="gray60",
+                font=ctk.CTkFont(size=11),
+                wraplength=220,
+                justify="left",
+            ).pack(anchor="w", padx=4, pady=6)
         if truncated:
             ctk.CTkLabel(
                 self._master_tag_frame,
@@ -861,26 +957,138 @@ class StepCaptions(ctk.CTkFrame):
                 text_color="gray60",
                 font=ctk.CTkFont(size=11),
             ).pack(anchor="w", padx=4, pady=(4, 2))
-        if hasattr(self, "_tag_count_label"):
-            self._tag_count_label.configure(text=f"({len(item.tags)})")
+
+    def _master_list_needs_full_rebuild(self, item) -> bool:
+        if item is None:
+            return True
+        filt = self._tag_filter_lower()
+        if filt:
+            return True
+        pn = getattr(self, "_master_tag_pool_not_on_image_var", None)
+        if pn is not None and pn.get():
+            return True
+        self._build_tag_master_set()
+        # filt and pool_not_on already force full rebuild above
+        return len(self._tag_master_set) > MASTER_TAG_MAX_RENDER
+
+    def _rebuild_current_tag_rows(self, item) -> None:
+        self._clear_current_tag_rows()
+        if item is not None:
+            self._fill_current_tag_rows(item)
+        self._update_tag_count_label(item)
+
+    def _rebuild_master_tag_rows(self, item) -> None:
+        self._build_tag_master_set()
+        self._clear_master_tag_rows()
+        if item is not None:
+            self._fill_master_tag_rows(item)
+
+    def _patch_pool_row_for_tag(self, item, tag: str) -> bool:
+        """Update +/- on one master row if present. Returns False if row not found."""
+        now_active = tag in item.tags
+        target = None
+        for row in self._master_tag_frame.winfo_children():
+            if getattr(row, "_tag_key", None) == tag:
+                target = row
+                break
+        if target is None:
+            return False
+        children = target.winfo_children()
+        if len(children) < 2:
+            return False
+        btn = children[1]
+        btn.configure(
+            text="-" if now_active else "+",
+            fg_color="darkred" if now_active else "#1f538d",
+            command=self._make_pool_toggle_closure(item, tag, now_active),
+        )
+        return True
+
+    def _make_pool_toggle_closure(self, item, tag: str, active: bool):
+        def _click():
+            if active:
+                if tag in item.tags:
+                    item.tags.remove(tag)
+                if tag in item.tags_from_scan:
+                    item.tags_from_scan.remove(tag)
+            else:
+                if tag not in item.tags:
+                    item.tags.append(tag)
+            self._refresh_tags_after_toggle(item, tag, pool_row=True)
+            if self.on_changed:
+                self.on_changed()
+        return _click
+
+    def _refresh_tags_after_toggle(self, item, tag: str, pool_row: bool) -> None:
+        self._rebuild_current_tag_rows(item)
+        if self._master_list_needs_full_rebuild(item):
+            self._rebuild_master_tag_rows(item)
+        elif not self._patch_pool_row_for_tag(item, tag):
+            self._rebuild_master_tag_rows(item)
+        self.update_idletasks()
+
+    def _rebuild_tag_list(self, item=None):
+        """Rebuild current-image and master tag lists for the given (or current) item."""
+        if not hasattr(self, "_current_tag_frame") or not hasattr(self, "_master_tag_frame"):
+            return
+        item = self._resolve_tag_list_item(item)
+        self._build_tag_master_set()
+        self._clear_current_tag_rows()
+        self._clear_master_tag_rows()
+        if item is None:
+            self._update_tag_count_label(None)
+            self.update_idletasks()
+            self._reset_tag_scroll_positions()
+            return
+        self._fill_current_tag_rows(item)
+        self._fill_master_tag_rows(item)
+        self._update_tag_count_label(item)
         self.update_idletasks()
         self._reset_tag_scroll_positions()
 
-    def _make_tag_row(self, frame, tag: str, active: bool, item):
+    def _remove_tag_from_entire_session(self, tag: str, item) -> None:
+        """Remove tag from every session item (tags + tags_from_scan), then refresh lists."""
+        n = len(self.session.items)
+        if n == 0:
+            return
+        if not messagebox.askyesno(
+            "Remove tag from session",
+            f'Remove "{tag}" from all {n} image(s) in this session?',
+            parent=self.winfo_toplevel(),
+        ):
+            return
+        for it in self.session.items:
+            if tag in it.tags:
+                it.tags.remove(tag)
+            if tag in it.tags_from_scan:
+                it.tags_from_scan.remove(tag)
+        self._build_tag_master_set()
+        self._rebuild_tag_list(item)
+        if self.on_changed:
+            self.on_changed()
+
+    def _make_tag_row(self, frame, tag: str, active: bool, item, pool_row: bool = False):
         """One compact row: tag text then +/- (no extra frames/lines — avoids scroll-canvas glitches)."""
         row = ctk.CTkFrame(frame, fg_color=("gray88", "gray25"), corner_radius=2)
         row.pack(fill="x", pady=1, padx=1)
+        row._tag_key = tag
 
-        def toggle(t=tag, a=active):
-            if a:
+        def toggle(t=tag, a=active, pr=pool_row):
+            if pr:
+                if a:
+                    if t in item.tags:
+                        item.tags.remove(t)
+                    if t in item.tags_from_scan:
+                        item.tags_from_scan.remove(t)
+                else:
+                    if t not in item.tags:
+                        item.tags.append(t)
+            else:
                 if t in item.tags:
                     item.tags.remove(t)
                 if t in item.tags_from_scan:
                     item.tags_from_scan.remove(t)
-            else:
-                if t not in item.tags:
-                    item.tags.append(t)
-            self._rebuild_tag_list(item)
+            self._refresh_tags_after_toggle(item, t, pool_row=pr)
             if self.on_changed:
                 self.on_changed()
 
@@ -896,6 +1104,22 @@ class StepCaptions(ctk.CTkFrame):
             fg_color="darkred" if active else "#1f538d",
             command=toggle,
         ).pack(side="left", padx=(0, 4), pady=2)
+        if pool_row:
+
+            def remove_all(t=tag):
+                self._remove_tag_from_entire_session(t, item)
+
+            _rm = ctk.CTkButton(
+                row,
+                text="×",
+                width=26,
+                height=22,
+                fg_color=("gray55", "gray35"),
+                hover_color=("gray45", "gray28"),
+                command=remove_all,
+            )
+            _rm.pack(side="left", padx=(0, 4), pady=2)
+            add_tooltip(_rm, "Remove this tag from every image in the session (master list).")
 
     def _update_panel_pack_weights(self):
         """Give horizontal space to expanded panels only."""
@@ -943,7 +1167,10 @@ class StepCaptions(ctk.CTkFrame):
         if item and tag not in item.tags:
             item.tags.append(tag)
         self._new_tag_entry.delete(0, "end")
-        self._rebuild_tag_list(item)
+        self._rebuild_current_tag_rows(item)
+        if getattr(self, "_master_tag_pool_use_full", False):
+            self._rebuild_master_tag_rows(item)
+        self.update_idletasks()
 
     def _build_tag_master_set(self):
         """Rebuild master tag pool from session items (scanned-only vs full union)."""
@@ -1022,6 +1249,7 @@ class StepCaptions(ctk.CTkFrame):
             return
         self.current_index = idx
         self._selected_index_caption = idx
+        self._refresh_list(refresh_editors=False)
         self._load_current_from_session()
         self.session.set_output_format(self.output_format_var.get())
 
@@ -1087,8 +1315,8 @@ class StepCaptions(ctk.CTkFrame):
 
     # ---- List + preview helpers ----
 
-    def _refresh_list(self):
-        """Rebuild the session image list and update preview."""
+    def _refresh_list(self, refresh_editors: bool = True):
+        """Rebuild the session image list; optionally refresh preview and tag editors."""
         frame = getattr(self, "_listbox_frame_captions", None)
         if frame is None:
             return
@@ -1099,6 +1327,7 @@ class StepCaptions(ctk.CTkFrame):
             empty = ctk.CTkLabel(frame, text="No images in session.", text_color="gray60")
             empty.pack(anchor="w", pady=5)
             self._update_preview()
+            self._rebuild_tag_list()
             return
         if self._selected_index_caption is None or not (0 <= self._selected_index_caption < len(items)):
             self._selected_index_caption = 0
@@ -1119,8 +1348,9 @@ class StepCaptions(ctk.CTkFrame):
             lbl.pack(fill="x", padx=8, pady=4)
             lbl.bind("<Button-1>", lambda e, idx=i: self._on_row_click(idx))
             row.bind("<Button-1>", lambda e, idx=i: self._on_row_click(idx))
-        self._update_preview()
-        self._rebuild_tag_list()
+        if refresh_editors:
+            self._update_preview()
+            self._rebuild_tag_list()
 
     def _on_row_click(self, index: int):
         """Handle click on a list row — save current edits before switching."""
@@ -1130,8 +1360,8 @@ class StepCaptions(ctk.CTkFrame):
         self._selected_index_caption = index
         self.current_index = index
         self.index_var.set(str(index + 1))
+        self._refresh_list(refresh_editors=False)
         self._load_current_from_session()
-        self._refresh_list()
 
     def _load_current_from_session(self):
         """Load tags/caption for current_index into editors and update preview."""
@@ -1188,7 +1418,9 @@ class StepCaptions(ctk.CTkFrame):
         win.resizable(True, True)
         f = ctk.CTkFrame(win, fg_color="transparent")
         f.pack(fill="both", expand=True, padx=6, pady=(6, 0))
-        canvas = _make_zoom_pan_canvas(f, width=cw, height=ch)
+        canvas = _make_zoom_pan_canvas(
+            f, width=cw, height=ch, max_preview_side=4096, max_photo_side=8192
+        )
         canvas.pack(fill="both", expand=True)
         canvas.load_image(image)
         info = ctk.CTkLabel(win, text=f"#{idx + 1} — {item.original_path.name}  |  {image.width}×{image.height}px",

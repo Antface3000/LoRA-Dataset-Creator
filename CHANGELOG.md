@@ -22,6 +22,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `tags_from_scan` updated by WD14; manual adds use `tags` only. Preference is saved per
   profile as `master_tag_list_mode`.
 
+- **Session tag pool filter & remove** — **Not on this image only** (per-profile
+  `master_tag_pool_not_on_image_only`) limits the pool list to tags you have not added to
+  the current image yet. Each pool row has **×** to remove that tag from every image in
+  the session (with confirmation), clearing it from both `tags` and `tags_from_scan`.
+
 ### Changed
 
 - **Wizard Step 3 toolbar** — One **general** bar under the hint (image index, Load, tag
@@ -31,6 +36,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **Master tag list filter** — The session pool lists up to the existing render cap
   without requiring a minimum filter length (removed the old “type N characters” gate).
+
+- **Wizard preview performance** — Zoom/pan canvases downsample large images before
+  display (`max_preview_side` / `max_photo_side`, stricter for Step 3 than Step 2, higher
+  for “Preview in window”) and cap zoom so `PhotoImage` work stays bounded on the UI thread.
+
+- **Step 3 session list selection** — Choosing another image updates the list highlight
+  without loading the preview and rebuilding tag lists twice (`_refresh_list` with
+  `refresh_editors=False` before loading editors).
+
+- **Step 3 tag +/- responsiveness** — When the filter is empty, **Not on this image only**
+  is off, and the master pool is under the render cap, toggling a tag rebuilds the
+  current-image list only and patches the matching pool row in place instead of
+  destroying both scroll frames every time.
+
+- **Smart Crop batch resize** — After YOLO/NudeNet crop, images are fitted with
+  `resize_cover_to_bucket` (`ImageOps.fit`: scale + center crop to bucket size) instead
+  of letterboxing with black bars.
 
 - **Local caption pipeline** — Vision-stage user text is built from WD14 tags; Llama
   finalization respects the Step 3 / profile system prompt via
@@ -68,6 +90,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   header is now only shown when the Wizard tab is active.
 
 ### Fixed
+
+- **Default profile template** — New profiles include `master_tag_pool_not_on_image_only`
+  in the factory defaults so the Step 3 pool filter preference saves consistently.
 
 - **Session tag pool menu stuck or profile wiped** — Changing the pool mode no longer
   builds the save payload from `load_profile(...) or {}` (which could replace the whole

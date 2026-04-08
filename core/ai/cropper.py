@@ -254,6 +254,30 @@ def resize_to_bucket(image: Image.Image, bucket: str) -> Image.Image:
     return image.resize((target_w, target_h), Image.Resampling.LANCZOS)
 
 
+def resize_cover_to_bucket(image: Image.Image, bucket: str) -> Image.Image:
+    """Scale to cover bucket dimensions, then center-crop (no padding or stretch).
+
+    Unlike letterboxing, does not add black bars; unlike resize_to_bucket, does not
+    distort aspect ratio. Edges may be cropped to fit the bucket shape.
+
+    Args:
+        image: PIL Image to resize
+        bucket: Bucket type ('portrait', 'square', 'landscape')
+
+    Returns:
+        PIL Image at exact bucket width × height
+    """
+    from PIL import ImageOps
+
+    target_w, target_h = BUCKETS[bucket]
+    return ImageOps.fit(
+        image,
+        (target_w, target_h),
+        method=Image.Resampling.LANCZOS,
+        centering=(0.5, 0.5),
+    )
+
+
 def resize_letterbox(image: Image.Image, bucket: str) -> Image.Image:
     """Fit image into bucket dimensions while preserving aspect ratio (letterbox).
 

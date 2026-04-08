@@ -87,6 +87,7 @@ class ProfilesManager:
                     "color_theme": "blue",
                     "min_crop_px": 512,
                     "master_tag_list_mode": "scanned",
+                    "master_tag_pool_not_on_image_only": False,
                 }
             },
             "current_profile": "User settings",

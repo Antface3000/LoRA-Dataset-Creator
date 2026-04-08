@@ -9,7 +9,7 @@ from PIL import Image
 from typing import Optional, Callable
 
 from core.pipeline_manager import get_pipeline_manager
-from core.ai.cropper import resize_to_bucket, resize_letterbox
+from core.ai.cropper import resize_to_bucket, resize_cover_to_bucket
 from core.ai.vram import get_vram_manager, State
 from core.data.file_handler import load_image_files, save_cropped_image_flat, create_output_structure
 from core.config import BUCKETS
@@ -624,9 +624,9 @@ class SortTab(ctk.CTkFrame):
                         passthrough_count += 1
                         continue
 
-                    # Step 9: crop → letterbox resize → save
+                    # Step 9: crop → cover (scale + center-crop to bucket; no black bars)
                     cropped = img.crop((fx1, fy1, fx2, fy2))
-                    resized = resize_letterbox(cropped, bucket)
+                    resized = resize_cover_to_bucket(cropped, bucket)
                     saved = save_cropped_image_flat(resized, output_dir, bucket, img_path.stem)
                     self.pipeline_manager.add_to_caption_queue(saved)
                     cropped_count += 1
