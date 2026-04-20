@@ -1,35 +1,35 @@
 """UI setup helpers for SortTab."""
 
 import customtkinter as ctk
-from tkinter import Canvas, Scrollbar
+from tkinter import Canvas
 from core.config import BUCKETS
-from typing import Dict, Callable
+from typing import Dict, Callable, Tuple
 from ui.tooltip import add_tooltip
 from core.ai.nudenet_detector import DISPLAY_NAMES as _NUDENET_DISPLAY_NAMES
 
 
-def create_canvas_frame(parent) -> tuple[Canvas, ctk.CTkFrame]:
-    """Create canvas with scrollbars.
-    
+def create_canvas_frame(parent) -> Tuple[Canvas, ctk.CTkFrame, ctk.CTkLabel]:
+    """Create canvas area: progress label above, canvas fills remaining space (no scrollbars).
+
     Returns:
-        (canvas, canvas_frame) tuple
+        (canvas, canvas_frame, progress_label)
     """
     canvas_frame = ctk.CTkFrame(parent)
     canvas_frame.pack(side="left", fill="both", expand=True, padx=(0, 10))
-    
-    v_scroll = Scrollbar(canvas_frame, orient="vertical")
-    h_scroll = Scrollbar(canvas_frame, orient="horizontal")
-    canvas = Canvas(canvas_frame, bg="#1a1a1a", yscrollcommand=v_scroll.set, xscrollcommand=h_scroll.set)
-    v_scroll.config(command=canvas.yview)
-    h_scroll.config(command=canvas.xview)
-    
-    canvas.grid(row=0, column=0, sticky="nsew")
-    v_scroll.grid(row=0, column=1, sticky="ns")
-    h_scroll.grid(row=1, column=0, sticky="ew")
-    canvas_frame.grid_rowconfigure(0, weight=1)
-    canvas_frame.grid_columnconfigure(0, weight=1)
-    
-    return canvas, canvas_frame
+
+    progress_label = ctk.CTkLabel(
+        canvas_frame,
+        text="—",
+        anchor="w",
+        font=ctk.CTkFont(size=12),
+        text_color=("gray30", "gray75"),
+    )
+    progress_label.pack(fill="x", padx=8, pady=(8, 4))
+
+    canvas = Canvas(canvas_frame, bg="#1a1a1a", highlightthickness=0)
+    canvas.pack(fill="both", expand=True)
+
+    return canvas, canvas_frame, progress_label
 
 
 def create_control_panel(parent) -> tuple[ctk.CTkScrollableFrame, dict]:
@@ -217,7 +217,11 @@ def create_control_panel(parent) -> tuple[ctk.CTkScrollableFrame, dict]:
         rb = ctk.CTkRadioButton(bucket_frame, text=f"{bucket.title()} ({w}×{h})",
                                 variable=bucket_var, value=bucket)
         rb.pack(anchor="w", padx=16, pady=2)
-        add_tooltip(rb, f"Crop and resize the image to the {bucket} bucket ({w}×{h} px)")
+        add_tooltip(
+            rb,
+            f"Use {bucket} aspect ({w}×{h} target) for the default crop frame; "
+            f"saved files keep the crop's actual pixel size (no stretch to {w}×{h}).",
+        )
     no_crop_rb = ctk.CTkRadioButton(
         bucket_frame,
         text="No crop  (pass through at original size)",
@@ -242,8 +246,11 @@ def create_control_panel(parent) -> tuple[ctk.CTkScrollableFrame, dict]:
     add_tooltip(widgets['prev_button'], "Go back to the previous image (does not undo saved crops)")
     widgets['save_button'] = ctk.CTkButton(action_frame, text="Save & Next", fg_color="green")
     widgets['save_button'].pack(pady=3, fill="x")
-    add_tooltip(widgets['save_button'],
-                "Crop and resize this image to the selected bucket, then advance to the next")
+    add_tooltip(
+        widgets['save_button'],
+        "Save the current crop at its native pixel size (filename keeps the bucket prefix), "
+        "then advance to the next image",
+    )
     widgets['skip_button'] = ctk.CTkButton(action_frame, text="Skip", fg_color="red")
     widgets['skip_button'].pack(pady=3, fill="x")
     add_tooltip(widgets['skip_button'], "Skip this image without saving a crop")

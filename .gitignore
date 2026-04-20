@@ -21,6 +21,7 @@ venv/
 
 # Runtime / personal config
 flux_prep_config.json
+wizard_session_autosave.json
 benchmark_output/
 
 # Cursor / IDE

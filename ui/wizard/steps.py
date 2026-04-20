@@ -232,9 +232,16 @@ class StepDirectories(ctk.CTkFrame):
 
 class StepImages(ctk.CTkFrame):
     """Step 2: Add/remove/rename images in session."""
-    def __init__(self, parent, on_list_changed: Optional[Callable[[], None]] = None, **kwargs):
+    def __init__(
+        self,
+        parent,
+        on_list_changed: Optional[Callable[[], None]] = None,
+        on_clear_session: Optional[Callable[[], None]] = None,
+        **kwargs,
+    ):
         super().__init__(parent, fg_color="transparent", **kwargs)
         self.on_list_changed = on_list_changed
+        self.on_clear_session = on_clear_session
         self.session = get_session()
         self._listbox_frame = None
         self._listbox = None
@@ -264,6 +271,17 @@ class StepImages(ctk.CTkFrame):
         _remove_btn = ctk.CTkButton(btn_frame, text="Remove", width=100, command=self._remove_selected)
         _remove_btn.pack(side="left", padx=(0, 5))
         add_tooltip(_remove_btn, "Remove selected images from the session (does not delete files on disk)")
+        if self.on_clear_session:
+            _clear_all_btn = ctk.CTkButton(
+                btn_frame, text="Clear session", width=110, fg_color="gray40",
+                command=self._clear_entire_session,
+            )
+            _clear_all_btn.pack(side="left", padx=(0, 5))
+            add_tooltip(
+                _clear_all_btn,
+                "Remove every image from the wizard session and delete the on-disk autosave draft. "
+                "Does not delete image files on disk.",
+            )
         ctk.CTkLabel(top_frame, text="Click an image to select it; Ctrl+click for multiple. Use the Batch Rename tab to rename source files.",
                      font=ctk.CTkFont(size=11), text_color="gray70").pack(anchor="w", pady=(2, 4))
 
@@ -374,6 +392,19 @@ class StepImages(ctk.CTkFrame):
         self._refresh_list()
         if self.on_list_changed:
             self.on_list_changed()
+
+    def _clear_entire_session(self):
+        if not self.session.items:
+            messagebox.showinfo("Clear session", "Session is already empty.")
+            return
+        if not messagebox.askyesno(
+            "Clear session",
+            "Remove all images from the wizard session and discard the saved draft on disk?\n\n"
+            "This does not delete your image files.",
+        ):
+            return
+        if self.on_clear_session:
+            self.on_clear_session()
 
     def _rename_selected(self):
         sel = self._get_selected_list()

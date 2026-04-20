@@ -1,6 +1,7 @@
 """Sorting/Cropping Tab - Filter/Sort/Crop Interface (VIEW ONLY, delegates to core)."""
 
 import shutil
+import sys
 import threading
 import customtkinter as ctk
 from tkinter import messagebox
@@ -9,7 +10,6 @@ from PIL import Image
 from typing import Optional, Callable
 
 from core.pipeline_manager import get_pipeline_manager
-from core.ai.cropper import resize_to_bucket, resize_cover_to_bucket
 from core.ai.vram import get_vram_manager, State
 from core.data.file_handler import load_image_files, save_cropped_image_flat, create_output_structure
 from core.config import BUCKETS
@@ -55,6 +55,8 @@ class SortTab(ctk.CTkFrame):
         self.auto_bucket_enabled = False
         self.canvas_helper = None
         self._nudenet_stop_event = threading.Event()
+        self._drag_button: Optional[int] = None
+        self._corner_aspect_ratio: Optional[float] = None
 
         self.setup_ui()
         self.vram_manager.ensure_state(State.CROPPING)
@@ -74,8 +76,8 @@ class SortTab(ctk.CTkFrame):
         content_frame = ctk.CTkFrame(self)
         content_frame.pack(fill="both", expand=True, padx=10, pady=10)
         
-        # Left: Image canvas
-        self.canvas, _ = create_canvas_frame(content_frame)
+        # Left: Image canvas (progress label + canvas, no scrollbars)
+        self.canvas, _, self.crop_progress_label = create_canvas_frame(content_frame)
         
         # Right: Controls
         _, control_widgets = create_control_panel(content_frame)
@@ -108,19 +110,34 @@ class SortTab(ctk.CTkFrame):
         self._min_crop_px_var = control_widgets['min_crop_px_var']
         self._min_crop_px_var.trace_add("write", self._on_min_crop_px_change)
 
-        # Back button at the bottom of the tab (navigates to Wizard tab)
+        # Back button at the bottom of the tab (opens session Images tab)
         nav_frame = ctk.CTkFrame(self, fg_color="transparent")
         nav_frame.pack(fill="x", padx=10, pady=(0, 8))
-        _back_wiz_btn = ctk.CTkButton(nav_frame, text="← Back to Wizard", width=140,
+        _back_wiz_btn = ctk.CTkButton(nav_frame, text="← Back to Images", width=140,
                                       command=self._go_back)
         _back_wiz_btn.pack(side="left")
-        add_tooltip(_back_wiz_btn, "Switch to the Wizard tab")
+        add_tooltip(_back_wiz_btn, "Switch to the Images tab (session list)")
 
-        # Canvas bindings
-        self.canvas.bind("<Button-1>", self.on_canvas_click)
+        # Canvas: left = resize handles; Shift+left interior = move; right / Mac B2 = move crop
+        self.canvas.bind("<Button-1>", self.on_canvas_press)
         self.canvas.bind("<B1-Motion>", self.on_canvas_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_canvas_release)
+        self.canvas.bind("<Button-3>", self.on_canvas_press)
+        self.canvas.bind("<B3-Motion>", self.on_canvas_drag)
+        self.canvas.bind("<ButtonRelease-3>", self.on_canvas_release)
+        # macOS: secondary click is often Button-2; Windows uses Button-3 (avoid stealing middle-click on Win/Linux)
+        if sys.platform == "darwin":
+            self.canvas.bind("<Button-2>", self.on_canvas_press)
+            self.canvas.bind("<B2-Motion>", self.on_canvas_drag)
+            self.canvas.bind("<ButtonRelease-2>", self.on_canvas_release)
         self.canvas.bind("<Configure>", self._on_canvas_resize)
+        add_tooltip(
+            self.crop_progress_label,
+            "Queue position. Left-drag yellow handles to resize the crop; "
+            "right-drag inside the crop to move it (on macOS, secondary-click drag); "
+            "Shift+left-drag inside also moves.",
+        )
+        self._update_crop_progress_label()
         
         # Profile-driven settings (updated by app_main.load_profile_settings)
         self.current_profile = {}
@@ -202,6 +219,7 @@ class SortTab(ctk.CTkFrame):
         else:
             self.original_image = None
             self.canvas.delete("all")
+            self._update_crop_progress_label()
 
     def apply_profile(self, profile: dict):
         """Apply current profile settings (thresholds, padding, confidence)."""
@@ -236,6 +254,8 @@ class SortTab(ctk.CTkFrame):
                 )
             if self.image_files:
                 self.load_current_image()
+            else:
+                self._update_crop_progress_label()
     
     def select_output(self):
         """Select output folder."""
@@ -316,6 +336,7 @@ class SortTab(ctk.CTkFrame):
     def load_current_image(self):
         """Load current image."""
         if self.current_index >= len(self.image_files):
+            self._update_crop_progress_label()
             return
         
         image_path = self.image_files[self.current_index]
@@ -344,6 +365,7 @@ class SortTab(ctk.CTkFrame):
         # Defer the draw by one event-loop tick so the canvas has been mapped
         # and winfo_width/height return the real pixel dimensions.
         self.after(0, self.update_display)
+        self._update_crop_progress_label()
     
     def _on_canvas_resize(self, event):
         """Debounce canvas Configure events to avoid spamming redraws during resize."""
@@ -384,46 +406,120 @@ class SortTab(ctk.CTkFrame):
         self.canvas.delete("all")
         self.canvas.create_image(canvas_width // 2, canvas_height // 2, anchor="center", image=self.current_photo)
     
-    def on_canvas_click(self, event):
-        """Handle canvas click: set drag mode and grab so drag continues past canvas border."""
-        self.drag_mode, self.drag_start_x, self.drag_start_y = handle_canvas_click(
-            event, self.canvas, self.canvas_helper,
-            self.crop_x1, self.crop_y1, self.crop_x2, self.crop_y2
+    def _update_crop_progress_label(self) -> None:
+        """Show 1-based index, total in queue, and how many left (including current)."""
+        n = len(self.image_files)
+        if n == 0:
+            self.crop_progress_label.configure(text="No images in queue")
+            return
+        i = self.current_index
+        if i < 0 or i >= n:
+            self.crop_progress_label.configure(text=f"—  ({n} image(s) in folder)")
+            return
+        cur = i + 1
+        remaining = n - i
+        self.crop_progress_label.configure(
+            text=f"Image {cur} / {n}  ·  {remaining} left in queue"
         )
-        if self.drag_mode:
-            try:
-                self.canvas.grab_set()
-            except Exception:
-                pass
+
+    def on_canvas_press(self, event):
+        """Left = resize via handles; Shift+left interior = move; right / Mac B2 = move crop."""
+        if not self.canvas_helper or self.current_bucket == "no_crop":
+            return
+        if event.num == 1:
+            shift_move = (getattr(event, "state", 0) & 0x0001) != 0
+            if shift_move:
+                mode, sx, sy = handle_canvas_click(
+                    event, self.canvas, self.canvas_helper,
+                    self.crop_x1, self.crop_y1, self.crop_x2, self.crop_y2,
+                    "move",
+                )
+                if mode == "move":
+                    self.drag_mode = "move"
+                    self._corner_aspect_ratio = None
+                    self.drag_start_x, self.drag_start_y = sx, sy
+                    self._drag_button = 1
+                    try:
+                        self.canvas.grab_set()
+                    except Exception:
+                        pass
+                    return
+            mode, sx, sy = handle_canvas_click(
+                event, self.canvas, self.canvas_helper,
+                self.crop_x1, self.crop_y1, self.crop_x2, self.crop_y2,
+                "resize",
+            )
+            if not mode:
+                return
+            self.drag_mode = mode
+            cw = self.crop_x2 - self.crop_x1
+            ch = self.crop_y2 - self.crop_y1
+            corners = ("resize_nw", "resize_ne", "resize_sw", "resize_se")
+            if mode in corners and ch > 1e-6:
+                self._corner_aspect_ratio = cw / ch
+            else:
+                self._corner_aspect_ratio = None
+            self.drag_start_x, self.drag_start_y = sx, sy
+            self._drag_button = 1
+        elif event.num in (2, 3):
+            mode, sx, sy = handle_canvas_click(
+                event, self.canvas, self.canvas_helper,
+                self.crop_x1, self.crop_y1, self.crop_x2, self.crop_y2,
+                "move",
+            )
+            if mode != "move":
+                return
+            self.drag_mode = "move"
+            self._corner_aspect_ratio = None
+            self.drag_start_x, self.drag_start_y = sx, sy
+            self._drag_button = event.num
+        else:
+            return
+        try:
+            self.canvas.grab_set()
+        except Exception:
+            pass
     
     def on_canvas_drag(self, event):
-        """Handle canvas drag."""
+        """Continue resize or move while drag_mode is set (do not filter on event.num)."""
+        if self.drag_mode is None or self._drag_button is None:
+            return
         new_coords = handle_canvas_drag(
             event, self.canvas, self.canvas_helper, self.original_image,
             self.drag_mode, self.drag_start_x, self.drag_start_y,
-            self.crop_x1, self.crop_y1, self.crop_x2, self.crop_y2
+            self.crop_x1, self.crop_y1, self.crop_x2, self.crop_y2,
+            self._corner_aspect_ratio,
         )
-        
         if new_coords != (self.crop_x1, self.crop_y1, self.crop_x2, self.crop_y2):
             self.crop_x1, self.crop_y1, self.crop_x2, self.crop_y2 = new_coords
             if self.drag_mode == "move" and self.canvas_helper:
                 canvas_x = self.canvas.canvasx(event.x)
                 canvas_y = self.canvas.canvasy(event.y)
-                self.drag_start_x, self.drag_start_y = self.canvas_helper.canvas_to_image_coords(canvas_x, canvas_y)
+                self.drag_start_x, self.drag_start_y = self.canvas_helper.canvas_to_image_coords(
+                    canvas_x, canvas_y
+                )
             self.update_display()
     
     def on_canvas_release(self, event):
-        """Handle canvas release: clear drag mode and release grab."""
+        """Clear drag state when the releasing button matches the one that started the drag."""
+        if self._drag_button is None:
+            return
+        en = getattr(event, "num", 0) or 0
+        # num == 0: accept (some platforms); else require match so B1 release doesn't end B3 drag
+        if en != 0 and en != self._drag_button:
+            return
         try:
             self.canvas.grab_release()
         except Exception:
             pass
         self.drag_mode = None
+        self._drag_button = None
+        self._corner_aspect_ratio = None
     
     def save_and_next(self):
         """Save crop and move to next."""
         # Resolve output folder: prefer the tab-local one, fall back to the
-        # pipeline manager's folder (set via the Wizard).
+        # pipeline manager's folder (set via Directories / profile).
         effective_output = self.output_folder or self.pipeline_manager.output_folder
         if not self.original_image or not effective_output:
             messagebox.showwarning("Warning", "Please select an output folder first.")
@@ -449,9 +545,8 @@ class SortTab(ctk.CTkFrame):
                     messagebox.showerror("Error", "Invalid crop region.")
                     return
                 cropped = self.original_image.crop(crop_coords)
-                resized = resize_to_bucket(cropped, self.current_bucket)
                 saved_path = save_cropped_image_flat(
-                    resized, effective_output, self.current_bucket, src_path.stem
+                    cropped, effective_output, self.current_bucket, src_path.stem
                 )
 
             self.pipeline_manager.add_to_caption_queue(saved_path)
@@ -462,6 +557,7 @@ class SortTab(ctk.CTkFrame):
 
             self.current_index += 1
             if self.current_index >= len(self.image_files):
+                self._update_crop_progress_label()
                 if self.on_last_image:
                     self.on_last_image()
                 return
@@ -486,6 +582,7 @@ class SortTab(ctk.CTkFrame):
         if self.current_index < len(self.image_files):
             self.load_current_image()
         else:
+            self._update_crop_progress_label()
             if self.on_last_image:
                 self.on_last_image()
             messagebox.showinfo("Complete", "All images have been processed!")
@@ -624,10 +721,9 @@ class SortTab(ctk.CTkFrame):
                         passthrough_count += 1
                         continue
 
-                    # Step 9: crop → cover (scale + center-crop to bucket; no black bars)
+                    # Step 9: save crop at native pixel size (no resize to bucket)
                     cropped = img.crop((fx1, fy1, fx2, fy2))
-                    resized = resize_cover_to_bucket(cropped, bucket)
-                    saved = save_cropped_image_flat(resized, output_dir, bucket, img_path.stem)
+                    saved = save_cropped_image_flat(cropped, output_dir, bucket, img_path.stem)
                     self.pipeline_manager.add_to_caption_queue(saved)
                     cropped_count += 1
 
@@ -650,7 +746,7 @@ class SortTab(ctk.CTkFrame):
                 "Smart Crop Complete",
                 f"{cropped_count} image(s) cropped and saved.\n"
                 f"{passthrough_count} passed through (no person or too small).{stop_note}\n\n"
-                "Switch to the Wizard tab to continue."
+                "Switch to the Images tab to add crops to your session and continue."
             )
 
         def on_error(e):

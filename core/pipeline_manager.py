@@ -92,7 +92,7 @@ class PipelineManager:
             Path to saved cropped image, or None on error
         """
         # Import here to avoid circular dependencies
-        from core.ai.cropper import detect_person, calculate_crop_box, resize_to_bucket
+        from core.ai.cropper import detect_person, calculate_crop_box
         from core.data.file_handler import save_cropped_image_flat
 
         with self.metrics.time_stage("stage2_crop_single"):
@@ -101,8 +101,7 @@ class PipelineManager:
             person = detect_person(image_path, yolo_model, confidence)
             crop_box = calculate_crop_box(image, person, bucket, padding)
             cropped = image.crop(crop_box)
-            resized = resize_to_bucket(cropped, bucket)
-            output_path = save_cropped_image_flat(resized, output_dir, bucket, image_path.stem)
+            output_path = save_cropped_image_flat(cropped, output_dir, bucket, image_path.stem)
 
         return output_path
 
@@ -129,7 +128,7 @@ class PipelineManager:
             Optional callable(completed: int) called after each image is written,
             where *completed* is the 1-based count of images processed so far.
         """
-        from core.ai.cropper import detect_people_batch, calculate_crop_box, resize_to_bucket
+        from core.ai.cropper import detect_people_batch, calculate_crop_box
         from core.data.file_handler import save_cropped_image_flat
 
         if not image_paths:
@@ -193,8 +192,7 @@ class PipelineManager:
             while not queued_inputs.empty():
                 image_path, selected_bucket, image, crop_box = queued_inputs.get()
                 cropped = image.crop(crop_box)
-                resized = resize_to_bucket(cropped, selected_bucket)
-                out = save_cropped_image_flat(resized, output_dir, selected_bucket, image_path.stem)
+                out = save_cropped_image_flat(cropped, output_dir, selected_bucket, image_path.stem)
                 written.append(out)
                 completed += 1
                 if progress_callback:

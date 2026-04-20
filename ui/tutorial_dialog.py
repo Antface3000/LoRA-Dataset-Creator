@@ -13,18 +13,18 @@ _SECTIONS = [
             "This tool guides you through five stages to turn a folder of raw images into "
             "a clean, tagged, and captioned dataset for training a LoRA model.",
             "Typical workflow:\n"
-            "  1. Set Folders  →  2. Add Images  →  3. Crop & Sort  →  "
-            "4. Tag & Caption  →  5. Finalize\n"
-            "The Batch Rename tab is an optional pre-processing step.",
+            "  1. Directories  →  2. Images  →  3. Crop & Sort  →  "
+            "4. Tags & Captions  →  5. Finalize\n"
+            "Each stage has its own tab at the top. The Batch Rename tab is an optional pre-processing step.",
             "Terminal / command-line instructions in this guide must be run in PowerShell.\n"
             "To open PowerShell:  press Win + R, type  powershell  and press Enter.\n"
             "All commands should be run from inside the LoRA-Dataset-Creator folder.",
         ],
     ),
     (
-        "Step 1 — Set Folders  (Wizard › Directories)",
+        "Step 1 — Set Folders  (Directories tab)",
         [
-            "Open the Wizard tab and use Step 1 to point the tool at your images.",
+            "Open the Directories tab and point the tool at your images.",
             "• Source folder — the folder containing your raw, unprocessed images.\n"
             "• Output folder — where the final cropped and tagged images will be written.",
             "Click Browse… next to each field and choose the appropriate folder. "
@@ -32,10 +32,9 @@ _SECTIONS = [
         ],
     ),
     (
-        "Step 2 — Add Images  (Wizard › Images)",
+        "Step 2 — Add Images  (Images tab)",
         [
-            "Click Next to reach Step 2, which builds the session list of images the "
-            "wizard will process.",
+            "Open the Images tab to build the session list of images the app will process.",
             "• Add from source folder — loads every supported image (.jpg, .png, .webp) "
             "from the source folder you set in Step 1.\n"
             "• Add files… — pick individual files from anywhere on disk.\n"
@@ -57,16 +56,22 @@ _SECTIONS = [
             "  2. Click Select Output to choose where cropped images are saved.\n"
             "  3. The first image loads automatically.",
             "Cropping:\n"
-            "  • Choose a bucket — Portrait (768×1152), Square (1024×1024), or "
-            "Landscape (1152×768).\n"
-            "  • Click and drag on the canvas to draw a crop rectangle.\n"
-            "  • Save & Next crops and resizes to the selected bucket, then loads the "
+            "  • Choose a bucket — Portrait, Square, or Landscape. This sets the "
+            "default crop aspect and the filename prefix (e.g. square_); the saved "
+            "image is exactly your crop pixels, not stretched to the reference size.\n"
+            "  • The bar above the canvas shows which image you are on (e.g. "
+            "Image 3 / 20) and how many are left in the queue.\n"
+            "  • Left-click and drag the yellow handles: corners resize diagonally "
+            "(aspect preserved); edge handles resize one side only.\n"
+            "  • Right-click and drag inside the crop (or secondary click on macOS) "
+            "to move the whole crop rectangle.\n"
+            "  • Save & Next writes the crop at native resolution, then loads the "
             "next image.\n"
             "  • Skip moves to the next image without saving.\n"
             "  • ← Previous goes back one image (saved crops are not undone).",
             "Batch / automatic cropping:\n"
-            "  • Auto crop all runs YOLO person detection on every image in the source "
-            "folder and crops automatically to the chosen bucket.\n"
+            "  • Smart Crop / batch YOLO cropping saves the detected region at its "
+            "native pixel size (bucket prefix only), not resized to a fixed bucket WxH.\n"
             "  • Quality Filter scores every image for blur (Laplacian variance) and "
             "aesthetic quality, and moves rejects to a subfolder. "
             "Enable Dry Run to preview which images would be rejected without moving "
@@ -74,10 +79,10 @@ _SECTIONS = [
         ],
     ),
     (
-        "Step 3 — Tag & Caption  (Wizard › Tags & Captions)",
+        "Step 3 — Tag & Caption  (Tags & Captions tab)",
         [
-            "After adding images in Step 2, click Next to reach the tagging and "
-            "captioning screen.",
+            "After adding images in Step 2, open the Tags & Captions tab for tagging and "
+            "captioning.",
             "Working with a single image:\n"
             "  1. Type an index number (1-based) in the Image index box and click Load.\n"
             "  2. Click Generate tags to run the WD14 tagger. Adjust the Tag threshold "
@@ -101,9 +106,9 @@ _SECTIONS = [
         ],
     ),
     (
-        "Step 4 — Finalize  (Wizard › Finalize)",
+        "Step 4 — Finalize  (Finalize tab)",
         [
-            "Click Next on Step 3 to reach the Finalize screen. Review the summary "
+            "Open the Finalize tab when you are ready to export. Review the summary "
             "(image count, output path, processed path) before committing.",
             "Options:\n"
             "  • Move originals to processed — after writing output files, the source "
@@ -122,7 +127,7 @@ _SECTIONS = [
         "Batch Rename Tab  (optional pre-processing)",
         [
             "The Batch Rename tab lets you rename raw images using WD14 tags as "
-            "filename prefixes before running the wizard. This is optional but can "
+            "filename prefixes before the main tagging workflow. This is optional but can "
             "help keep your file library organised.",
             "Workflow:\n"
             "  1. Click Browse… and select the folder of images to rename.\n"
@@ -204,7 +209,7 @@ _SECTIONS = [
             "For large models (JoyCaption, Gemma3) a GPU with at least 8 GB VRAM is\n"
             "recommended. Florence2 and Wizard-Vicuna can run on 4–6 GB VRAM.\n"
             "The app manages loading and unloading models automatically to fit within\n"
-            "available VRAM as you move between wizard steps.",
+            "available VRAM as you move between tabs (e.g. Tags & Captions vs Crop & Sort).",
         ],
     ),
     (

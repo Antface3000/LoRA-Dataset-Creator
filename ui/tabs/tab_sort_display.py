@@ -3,6 +3,8 @@
 from PIL import Image, ImageTk, ImageDraw
 from typing import Optional
 
+from ui.tabs.tab_sort_canvas import image_layout_for_canvas
+
 
 def create_crop_overlay(
     original_image: Image.Image,
@@ -23,20 +25,21 @@ def create_crop_overlay(
     Returns:
         PhotoImage ready for display
     """
-    # Calculate scale
-    scale = min(canvas_width / original_image.width, canvas_height / original_image.height, 1.0)
-    
-    display_size = (int(original_image.width * scale), int(original_image.height * scale))
+    lay = image_layout_for_canvas(canvas_width, canvas_height, original_image)
+    display_size = (lay.disp_w, lay.disp_h)
     display_image = original_image.resize(display_size, Image.Resampling.LANCZOS)
-    
-    # Draw crop overlay
+
+    # Draw crop overlay (display pixels = image coords × disp/iw, ih)
+    iw, ih = lay.iw, lay.ih
+    sx = lay.disp_w / iw if iw else 1.0
+    sy = lay.disp_h / ih if ih else 1.0
+
     overlay = display_image.copy().convert("RGBA")
-    draw = ImageDraw.Draw(overlay)
-    
-    crop_x1_d = crop_x1 * scale
-    crop_y1_d = crop_y1 * scale
-    crop_x2_d = crop_x2 * scale
-    crop_y2_d = crop_y2 * scale
+
+    crop_x1_d = crop_x1 * sx
+    crop_y1_d = crop_y1 * sy
+    crop_x2_d = crop_x2 * sx
+    crop_y2_d = crop_y2 * sy
     
     # Darken only the four strips OUTSIDE the crop box.
     # Build a fully-transparent layer, paint the outside regions dark, then
@@ -67,7 +70,7 @@ def create_crop_overlay(
     # Clamp each handle centre so it is never closer than handle_r pixels to
     # the image boundary — this prevents handles from being half-clipped when
     # the crop box is flush with the top, bottom, left, or right edge.
-    handle_r = 6
+    handle_r = 5
     ow, oh = overlay.size
 
     def _ch(cx, cy):
@@ -107,8 +110,8 @@ def create_plain_display(
 
     Used when the 'No crop (pass through)' bucket is active.
     """
-    scale = min(canvas_width / original_image.width, canvas_height / original_image.height, 1.0)
-    display_size = (int(original_image.width * scale), int(original_image.height * scale))
+    lay = image_layout_for_canvas(canvas_width, canvas_height, original_image)
+    display_size = (lay.disp_w, lay.disp_h)
     display_image = original_image.resize(display_size, Image.Resampling.LANCZOS)
     return ImageTk.PhotoImage(display_image.convert("RGB"))
 

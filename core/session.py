@@ -76,6 +76,14 @@ class Session:
         """Set how caption file is built: Tags only, Natural language, Both."""
         self._output_format = fmt
 
+    def get_output_format(self) -> str:
+        """Current sidecar format for finalize (Tags only / Natural language / Both)."""
+        return self._output_format
+
+    def replace_items(self, items: List[SessionItem]) -> None:
+        """Replace the session image list (used when restoring from autosave)."""
+        self._items = list(items)
+
     def set_finalize_behavior(self, move_originals: bool = True, workers: int = 1) -> None:
         """Configure finalize behavior for safety and throughput."""
         self._move_originals = bool(move_originals)
@@ -185,13 +193,11 @@ class Session:
                         img = Image.open(item.original_path).convert("RGB")
                         x1, y1, x2, y2 = item.crop_box
                         cropped = img.crop((x1, y1, x2, y2))
-                        from core.ai.cropper import resize_to_bucket
-                        resized = resize_to_bucket(cropped, item.bucket)
                         copy_image_to_output(
                             item.original_path,
                             self.output_folder,
                             stem,
-                            image=resized
+                            image=cropped
                         )
                     except Exception as e:
                         logger.exception("Crop/save failed for %s: %s", item.original_path.name, e)

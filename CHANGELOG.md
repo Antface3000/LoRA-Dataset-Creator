@@ -50,9 +50,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   current-image list only and patches the matching pool row in place instead of
   destroying both scroll frames every time.
 
-- **Smart Crop batch resize** — After YOLO/NudeNet crop, images are fitted with
-  `resize_cover_to_bucket` (`ImageOps.fit`: scale + center crop to bucket size) instead
-  of letterboxing with black bars.
+- **Cropped outputs at native size** — Manual Crop & Sort **Save & Next**, Smart Crop
+  batch, Wizard stage-2 crop (`PipelineManager`), and session **Finalize** now save the
+  PIL crop as-is (no `resize_to_bucket` or cover resize to fixed bucket dimensions).
+  Output dimensions match the crop rectangle; `portrait_` / `square_` / `landscape_`
+  filename prefixes are unchanged for skip/resume behavior.
 
 - **Local caption pipeline** — Vision-stage user text is built from WD14 tags; Llama
   finalization respects the Step 3 / profile system prompt via
